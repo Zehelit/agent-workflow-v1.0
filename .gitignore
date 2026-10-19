@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+.agent-workflow-v1-0/
+*.zip
+.env
+.env.*

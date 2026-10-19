@@ -1,0 +1,191 @@
+"""Deterministic artifact, installation ACLs and transactional update recovery."""
+import argparse
+import hashlib
+import importlib.util
+import json
+import os
+from pathlib import Path
+import shutil
+import subprocess
+import sys
+import tempfile
+import unittest
+from unittest import mock
+import zipfile
+
+ROOT=Path(__file__).resolve().parents[2]
+PYTHON=[sys.executable,'-X','utf8','-B']
+
+def hashes(root):
+    return {path.relative_to(root).as_posix():hashlib.sha256(path.read_bytes()).hexdigest() for path in root.rglob('*') if path.is_file()}
+
+class CandidatePackageTests(unittest.TestCase):
+    def setUp(self):
+        self.temp=tempfile.TemporaryDirectory(prefix='candidate-package-')
+        self.addCleanup(self.temp.cleanup)
+        self.base=Path(self.temp.name)
+
+    def build(self, name, source=ROOT):
+        dest=self.base/name
+        result=subprocess.run([*PYTHON,str(ROOT/'tooling/build-candidate.py'),'--source',str(source),'--output',str(dest)],capture_output=True,text=True,timeout=15)
+        self.assertEqual(result.returncode,0,result.stderr+result.stdout)
+        return dest, json.loads(result.stdout)
+
+    def cli(self, build, receipt, *commands, good=True):
+        package=build/'agent-workflow-v1-0'
+        result=subprocess.run([*PYTHON,str(package/'scripts/candidate.py'),'--manifest',str(package/'manifest.json'),
+            '--manifest-sha256',receipt['manifest_sha256'],'--version','1.0',*commands],capture_output=True,text=True,timeout=15)
+        if good:self.assertEqual(result.returncode,0,result.stderr+result.stdout)
+        else:self.assertNotEqual(result.returncode,0,result.stdout)
+        return result
+
+    def test_two_clean_builds_are_byte_identical_identity_and_private_watcher(self):
+        a,ar=self.build('a');b,br=self.build('b')
+        self.assertEqual(ar,br)
+        self.assertEqual(hashes(a),hashes(b))
+        package=a/'agent-workflow-v1-0'
+        skill=(package/'SKILL.md').read_text(encoding='utf-8')
+        self.assertIn('name: agent-workflow-v1-0',skill)
+        interface=(package/'agents/openai.yaml').read_text(encoding='utf-8')
+        self.assertIn('display_name: "agent-workflow-v1.0"',interface)
+        self.assertIn('allow_implicit_invocation: false',interface)
+        manifest=json.loads((package/'manifest.json').read_bytes())
+        self.assertEqual(manifest['files']['private/limit-watcher/scripts/monitor.py'],hashlib.sha256((ROOT/'skills/agent-workflow-v1-0/private/limit-watcher/scripts/monitor.py').read_bytes()).hexdigest())
+        with zipfile.ZipFile(a/'agent-workflow-v1-0.zip') as archive:
+            self.assertIsNone(archive.testzip())
+            self.assertTrue(all(name.startswith('agent-workflow-v1-0/') for name in archive.namelist()))
+            self.assertFalse(any('__pycache__' in name or '/tests/' in name for name in archive.namelist()))
+            self.assertEqual(sum(name.endswith('/SKILL.md') for name in archive.namelist()),1)
+        result=subprocess.run([*PYTHON,str(ROOT/'tooling/build-candidate.py'),'--output',str(a)],capture_output=True,text=True)
+        self.assertNotEqual(result.returncode,0)
+
+    def test_fresh_noop_update_edited_refusal_without_archive(self):
+        build,receipt=self.build('original')
+        dest=self.base/'skills/agent-workflow-v1-0'
+        old=self.base/'skills/unrelated-reader'
+        watcher=self.base/'skills/unrelated-skill'
+        old.mkdir(parents=True);watcher.mkdir()
+        (old/'SKILL.md').write_text('preserved unrelated skill')
+        (watcher/'role.json').write_text('preserved unrelated role')
+        preserved=(hashes(old),hashes(watcher))
+        first=self.cli(build,receipt,'install','--destination',str(dest))
+        self.assertTrue(json.loads(first.stdout)['changed'])
+        original=hashes(dest)
+        noop=self.cli(build,receipt,'install','--destination',str(dest))
+        self.assertFalse(json.loads(noop.stdout)['changed'])
+        self.assertEqual(hashes(dest),original)
+        edited=dest/'SKILL.md';raw=edited.read_bytes();edited.write_bytes(raw+b'local user edit')
+        before=hashes(dest)
+        self.cli(build,receipt,'install','--destination',str(dest),'--update',good=False)
+        self.assertEqual(hashes(dest),before)
+        edited.write_bytes(raw)
+        source=self.base/'changed-source'
+        shutil.copytree(ROOT/'skills/agent-workflow-v1-0',source/'skills/agent-workflow-v1-0',ignore=shutil.ignore_patterns('__pycache__','tests'))
+        changed=source/'skills/agent-workflow-v1-0/references/coexistence.md';changed.write_bytes(changed.read_bytes()+b'\nApproved staging update fixture.\n')
+        updated,updated_receipt=self.build('updated',source)
+        self.cli(updated,updated_receipt,'install','--destination',str(dest),good=False)
+        self.assertEqual(hashes(dest),original)
+        self.cli(updated,updated_receipt,'install','--destination',str(dest),'--update')
+        self.assertNotEqual(hashes(dest),original)
+        backup=dest.parent/'.agent-workflow-v1-0-rollback.zip'
+        self.assertFalse(backup.exists())
+        self.cli(updated,updated_receipt,'rollback','--destination',str(dest),good=False)
+        self.assertFalse(list(dest.parent.glob('candidate-install-*')))
+        self.assertEqual((hashes(old),hashes(watcher)),preserved)
+
+    def test_failed_publication_restores_existing_package(self):
+        original,receipt=self.build('transaction-original')
+        dest=self.base/'transaction-skills/agent-workflow-v1-0'
+        self.cli(original,receipt,'install','--destination',str(dest))
+        before=hashes(dest)
+        source=self.base/'transaction-source'
+        shutil.copytree(ROOT/'skills/agent-workflow-v1-0',source/'skills/agent-workflow-v1-0',ignore=shutil.ignore_patterns('__pycache__','tests'))
+        changed=source/'skills/agent-workflow-v1-0/references/coexistence.md'
+        changed.write_bytes(changed.read_bytes()+b'\nTransaction test.\n')
+        build,pin=self.build('transaction-updated',source)
+        package=build/'agent-workflow-v1-0'
+        spec=importlib.util.spec_from_file_location('transaction_candidate',package/'scripts/candidate.py')
+        candidate=importlib.util.module_from_spec(spec);spec.loader.exec_module(candidate)
+        runtime=candidate.Runtime(argparse.Namespace(manifest=str(package/'manifest.json'),
+            manifest_sha256=pin['manifest_sha256'],version='1.0',mode='install'))
+        original_rename=Path.rename
+        def fail_publish(path,target):
+            if path.name=='package' and Path(target)==dest:
+                raise PermissionError('injected publication denial')
+            return original_rename(path,target)
+        with mock.patch.object(Path,'rename',fail_publish):
+            with self.assertRaisesRegex(PermissionError,'injected publication'):
+                candidate.stage_install(runtime,dest,update=True)
+        self.assertEqual(hashes(dest),before)
+        self.assertFalse(list(dest.parent.glob('candidate-install-*')))
+        self.assertFalse(list(dest.parent.glob('*.zip')))
+
+    def test_failed_restoration_keeps_only_copy_for_recovery(self):
+        original,receipt=self.build('recovery-original')
+        dest=self.base/'recovery-skills/agent-workflow-v1-0'
+        self.cli(original,receipt,'install','--destination',str(dest))
+        before=hashes(dest)
+        source=self.base/'recovery-source'
+        shutil.copytree(ROOT/'skills/agent-workflow-v1-0',source/'skills/agent-workflow-v1-0',ignore=shutil.ignore_patterns('__pycache__','tests'))
+        changed=source/'skills/agent-workflow-v1-0/references/coexistence.md'
+        changed.write_bytes(changed.read_bytes()+b'\nRecovery test.\n')
+        build,pin=self.build('recovery-updated',source)
+        package=build/'agent-workflow-v1-0'
+        spec=importlib.util.spec_from_file_location('recovery_candidate',package/'scripts/candidate.py')
+        candidate=importlib.util.module_from_spec(spec);spec.loader.exec_module(candidate)
+        runtime=candidate.Runtime(argparse.Namespace(manifest=str(package/'manifest.json'),
+            manifest_sha256=pin['manifest_sha256'],version='1.0',mode='install'))
+        original_rename=Path.rename
+        def deny_destination(path,target):
+            if Path(target)==dest:
+                raise PermissionError('injected destination denial')
+            return original_rename(path,target)
+        with mock.patch.object(Path,'rename',deny_destination):
+            with self.assertRaises(PermissionError):
+                candidate.stage_install(runtime,dest,update=True)
+        pending=list(dest.parent.glob('candidate-install-*'))
+        self.assertEqual(len(pending),1)
+        self.assertEqual(hashes(pending[0]/'previous'),before)
+        self.assertFalse(dest.exists())
+        self.assertFalse(list(dest.parent.glob('*.zip')))
+
+    def test_candidate_runs_directly_without_skill_or_watcher_launch(self):
+        build,receipt=self.build('direct-entry')
+        project=self.base/'direct-project'
+        project.mkdir()
+        result=self.cli(build,receipt,'--project',str(project),'--run-id','direct-entry',
+            'workflow','validate')
+        response=json.loads(result.stdout)
+        self.assertEqual(response['identity'],'agent-workflow-v1-0')
+        run=project/'.agent-workflow-v1-0/runs/direct-entry'
+        self.assertTrue((run/'run-binding.json').is_file())
+        self.assertFalse((run/'watcher').exists())
+        self.assertFalse((run/'state.json').exists())
+
+    @unittest.skipUnless(os.name == 'nt', 'Windows ACL regression')
+    def test_install_and_update_preserve_normal_user_access(self):
+        icacls=Path(os.environ['SystemRoot'])/'System32'/'icacls.exe'
+        identity=subprocess.run(['whoami'],capture_output=True,text=True,check=True).stdout.strip()
+        def command(*args):
+            result=subprocess.run([str(icacls),*map(str,args)],capture_output=True,text=True,check=True)
+            return result.stdout
+        def assert_inherited_full_access(path):
+            lines=command(path).casefold().splitlines()
+            user_lines=[line for line in lines if identity.casefold()+':(i)' in line]
+            self.assertTrue(any('(f)' in line and '(deny)' not in line for line in user_lines),path)
+        command(self.base,'/reset')
+        dest=self.base/'skills/agent-workflow-v1-0'
+        original,receipt=self.build('acl-original')
+        self.cli(original,receipt,'install','--destination',str(dest))
+        for path in (dest,dest/'SKILL.md',dest/'scripts/candidate.py'):
+            assert_inherited_full_access(path)
+        source=self.base/'acl-updated-source'
+        shutil.copytree(ROOT/'skills/agent-workflow-v1-0',source/'skills/agent-workflow-v1-0',ignore=shutil.ignore_patterns('__pycache__','tests'))
+        changed=source/'skills/agent-workflow-v1-0/references/coexistence.md'
+        changed.write_bytes(changed.read_bytes()+b'\nACL update fixture.\n')
+        updated,updated_receipt=self.build('acl-updated',source)
+        self.cli(updated,updated_receipt,'install','--destination',str(dest),'--update')
+        for path in (dest,dest/'SKILL.md',dest/'scripts/candidate.py'):
+            assert_inherited_full_access(path)
+
+if __name__=='__main__':unittest.main(verbosity=2)

@@ -1,0 +1,7 @@
+name = "workflow_verifier"
+description = "Independently check acceptance criteria and consequential failure modes."
+model = "gpt-6.1-sol"
+model_reasoning_effort = "high"
+developer_instructions = "Evaluate actual artifacts against acceptance criteria. Reproduce consequential defects where practical. Report evidence, limitations and a clear pass or fail. Do not edit the deliverable or spawn agents."
+[workflow]
+efforts = ["high"]

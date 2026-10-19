@@ -1,0 +1,52 @@
+{
+  "schema_version": 1,
+  "roles": {
+    "limit_watcher": {
+      "name": "limit_watcher",
+      "fixed_model": "gpt-6-luna",
+      "default_effort": "low",
+      "allowed_efforts": [
+        "low",
+        "medium"
+      ],
+      "role_file": "limit_watcher.md"
+    }
+  },
+  "policy": {
+    "stop_remaining_percent": 10,
+    "usage_max_age_seconds": 300,
+    "monitored_window_minutes": [
+      300,
+      10080
+    ],
+    "check_intervals_seconds": [
+      {
+        "remaining_above": 40,
+        "seconds": 300
+      },
+      {
+        "remaining_above": 25,
+        "seconds": 120
+      },
+      {
+        "remaining_above": 20,
+        "seconds": 60
+      },
+      {
+        "remaining_above": 10,
+        "seconds": 30
+      }
+    ],
+    "checkpoint_remaining_percent": 25,
+    "serial_remaining_percent": 20,
+    "recovery_reserve_seconds": 120,
+    "model_invocation": "Only ambiguous usage or recovery evidence; routine checks are coordinator tool calls.",
+    "sampler": {
+      "script": "scripts/monitor.py",
+      "normal_interval_seconds": 300,
+      "activity_lease_seconds": 600,
+      "recovery_owner": "coordinator",
+      "routine_model_calls": 0
+    }
+  }
+}
