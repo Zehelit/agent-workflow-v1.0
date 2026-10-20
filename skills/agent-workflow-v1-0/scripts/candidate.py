@@ -166,6 +166,12 @@ def installation_files(root):
     for path in root.rglob('*'):
         unlinked(path)
         if path.is_file() and path.name != '.installation.json':
+            # Python may create bytecode beside installed modules even when the
+            # package was installed without it. It is disposable runtime data,
+            # not a user edit to an owned source file.
+            if (path.parent.name == '__pycache__' and path.suffix == '.pyc' and
+                    (path.parent.parent / (path.name.split('.', 1)[0] + '.py')).is_file()):
+                continue
             result[path.relative_to(root).as_posix()] = sha(path)
     return result
 

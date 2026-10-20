@@ -93,6 +93,30 @@ class CandidatePackageTests(unittest.TestCase):
         self.assertFalse(list(dest.parent.glob('candidate-install-*')))
         self.assertEqual((hashes(old),hashes(watcher)),preserved)
 
+    def test_generated_bytecode_does_not_block_an_owned_update(self):
+        original, receipt = self.build('bytecode-original')
+        dest = self.base / 'bytecode-skills/agent-workflow-v1-0'
+        self.cli(original, receipt, 'install', '--destination', str(dest))
+        cache = dest / 'scripts/__pycache__/workflow.cpython-312.pyc'
+        cache.parent.mkdir()
+        cache.write_bytes(b'disposable bytecode fixture')
+        noop = self.cli(original, receipt, 'install', '--destination', str(dest), '--update')
+        self.assertFalse(json.loads(noop.stdout)['changed'])
+
+        source = self.base / 'bytecode-changed-source'
+        shutil.copytree(ROOT / 'skills/agent-workflow-v1-0', source / 'skills/agent-workflow-v1-0',
+                        ignore=shutil.ignore_patterns('__pycache__', 'tests'))
+        changed = source / 'skills/agent-workflow-v1-0/references/coexistence.md'
+        changed.write_bytes(changed.read_bytes() + b'\nBytecode update fixture.\n')
+        updated, updated_receipt = self.build('bytecode-updated', source)
+        applied = self.cli(updated, updated_receipt, 'install', '--destination', str(dest), '--update')
+        self.assertTrue(json.loads(applied.stdout)['changed'])
+        self.assertFalse(cache.exists())
+
+        edited = dest / 'SKILL.md'
+        edited.write_bytes(edited.read_bytes() + b'local user edit')
+        self.cli(updated, updated_receipt, 'install', '--destination', str(dest), '--update', good=False)
+
     def test_failed_publication_restores_existing_package(self):
         original,receipt=self.build('transaction-original')
         dest=self.base/'transaction-skills/agent-workflow-v1-0'
