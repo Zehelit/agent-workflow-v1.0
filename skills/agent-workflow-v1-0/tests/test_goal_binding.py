@@ -162,10 +162,20 @@ class GoalBindingTests(unittest.TestCase):
                     'workflow', 'bind-active-goal', '--input', str(source)], capture_output=True, text=True, timeout=15)
                 self.assertEqual(result.returncode, 0, result.stderr)
                 def stop_watcher(entry=entry, run=run):
-                    stopped = subprocess.run([*python, str(entry), '--manifest', str(package / 'manifest.json'),
+                    command = [*python, str(entry), '--manifest', str(package / 'manifest.json'),
                         '--manifest-sha256', pin, '--version', '1.0', '--project', str(self.root), '--run-id', run,
-                        'watcher', 'stop'], capture_output=True, text=True, timeout=15)
+                        'watcher']
+                    stopped = subprocess.run([*command, 'stop'], capture_output=True, text=True, timeout=15)
                     self.assertEqual(stopped.returncode, 0, stopped.stderr)
+                    deadline = time.monotonic() + 8
+                    while True:
+                        observed = subprocess.run([*command, 'status'], capture_output=True, text=True, timeout=15)
+                        self.assertEqual(observed.returncode, 0, observed.stderr)
+                        health = json.loads(observed.stdout)['health']
+                        if health['identityState'] not in ('matched', 'unknown') and not health['liveIdentity']:
+                            break
+                        self.assertLess(time.monotonic(), deadline, 'watcher did not exit before fixture cleanup')
+                        time.sleep(0.1)
                 self.addCleanup(stop_watcher)
                 state = m.read_json(self.root / '.agent-workflow-v1-0/runs' / run / 'state.json')
                 self.assertEqual(state['native_binding']['goal_created_at'], now - 3600)
@@ -253,7 +263,7 @@ class GoalBindingTests(unittest.TestCase):
         self.call('dispatch_failed', id='work', evidence='unknown outcome', certain_not_started=False)
         self.reject('task', dict(id='uncertain', role='implementer', objective='deliver', criteria=['done']))
 
-    def test_stop_halt_requires_new_human_continuation_once_and_keeps_native_history(self):
+    def test_stop_halt_accepts_new_human_continuation_once_and_keeps_native_history(self):
         self.bind(); self.usage()
         stop = self.human('explicit_stop'); stop.pop('app_goal_observation')
         self.call('observe-authorization', **stop)
@@ -279,6 +289,63 @@ class GoalBindingTests(unittest.TestCase):
         self.call('activate', objective='deliver', **evidence, models={}, slot_limit=4, inventory=[], observed_at=self.now)
         self.assertEqual(m.read_json(self.engine.path)['native_binding_ids'], ['binding-a'])
         self.assertEqual(m.read_json(self.engine.path)['reserved_run_ids'], ['run-a', 'run-b'])
+
+    def test_native_ui_active_transition_resumes_once_without_invented_human_source(self):
+        self.bind(); self.usage(); self.halt()
+        halted = self.now
+        self.now += 1
+        paused = self.payload()['app_goal_observation']
+        paused.update(status='paused', source_id='post-halt-paused-receipt')
+        self.call('app-goal', app_goal_observation=paused)
+        self.now += 1
+        self.usage(); self.call('inventory', inventory=[], observed_at=self.now)
+        observation = self.payload()['app_goal_observation']
+        observation.update(updated_at=self.now, source_id='new-native-receipt')
+        self.assertEqual(self.call('resume', native_ui_resume=True,
+                                   app_goal_observation=observation)['basis'], 'native_ui_transition')
+        state = m.read_json(self.engine.path)
+        self.assertEqual(state['native_resume_events'][0]['halted_at'], halted)
+        self.assertEqual(state['native_resume_events'][0]['prior_observation'], paused)
+        self.assertEqual(state['authorization_events'], [])
+        self.assertNotIn('authorization', state)
+        self.assertIn('native_binding', state)
+        self.reject('resume', dict(native_ui_resume=True, app_goal_observation=observation))
+        self.halt(); self.now += 1
+        paused = self.payload()['app_goal_observation']
+        paused.update(status='blocked', source_id='second-post-halt-blocked-receipt')
+        self.call('app-goal', app_goal_observation=paused)
+        self.now += 1
+        self.usage(); self.call('inventory', inventory=[], observed_at=self.now)
+        self.reject('resume', dict(native_ui_resume=True, app_goal_observation=observation))
+        observation = self.payload()['app_goal_observation']
+        observation.update(updated_at=self.now, source_id='second-native-receipt')
+        self.call('resume', native_ui_resume=True, app_goal_observation=observation)
+        self.assertEqual(len(m.read_json(self.engine.path)['native_resume_events']), 2)
+
+    def test_native_resume_requires_new_transition_and_all_recovery_gates(self):
+        self.bind(); self.usage(); self.halt()
+        self.now += 2
+        observation = self.payload()['app_goal_observation']
+        for change in ({}, {'updated_at': self.now - 2},
+                       {'updated_at': self.now, 'status': 'paused'},
+                       {'updated_at': self.now, 'objective': 'another'}):
+            with self.subTest(change=change):
+                item = {**observation, **change}
+                self.reject('resume', dict(native_ui_resume=True, app_goal_observation=item))
+        observation.update(updated_at=self.now)
+        self.reject('resume', dict(native_ui_resume=True, app_goal_observation=observation))
+        self.usage()
+        self.reject('resume', dict(native_ui_resume=True, app_goal_observation=observation))
+        self.call('inventory', inventory=[], observed_at=self.now)
+        # A later updated_at on an already-active goal does not prove a resume.
+        self.reject('resume', dict(native_ui_resume=True, app_goal_observation=observation))
+        paused = self.payload()['app_goal_observation']
+        paused.update(status='paused', source_id='post-halt-paused-receipt')
+        self.call('app-goal', app_goal_observation=paused)
+        self.now += 1
+        observation.update(observed_at=self.now, updated_at=self.now)
+        self.usage(); self.call('inventory', inventory=[], observed_at=self.now)
+        self.call('resume', native_ui_resume=True, app_goal_observation=observation)
 
     def test_binding_identity_is_reserved_against_later_human_event_replay(self):
         self.bind(); self.usage(); self.halt()

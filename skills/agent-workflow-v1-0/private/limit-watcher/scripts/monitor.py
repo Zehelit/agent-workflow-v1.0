@@ -13,6 +13,7 @@ import subprocess
 import sys
 import threading
 import time
+import traceback
 import uuid
 
 LEASE_SECONDS = 600
@@ -334,7 +335,8 @@ def policy_card(control, now):
 
 def validate_control(control):
     require(type(control) is dict and set(control) <= {
-        'schemaVersion', 'active', 'expiresAt', 'runId', 'epoch', 'policyException', 'continuationQuote', 'continuedAt'
+        'schemaVersion', 'active', 'expiresAt', 'runId', 'epoch', 'policyException',
+        'continuationQuote', 'continuedAt', 'nativeTransition'
     }, 'invalid control fields')
     require(control.get('schemaVersion') == SCHEMA_VERSION and type(control.get('schemaVersion')) is int,
             'invalid control schema')
@@ -359,6 +361,14 @@ def validate_control(control):
                 'invalid continuation quote')
         require(number(control.get('continuedAt')), 'invalid continuation time')
     require(('continuationQuote' in control) == ('continuedAt' in control), 'incomplete continuation record')
+    if 'nativeTransition' in control:
+        transition = control['nativeTransition']
+        require(type(transition) is dict and set(transition) == {'updatedAt', 'sourceId'} and
+                number(transition['updatedAt']) and transition['updatedAt'] >= 0 and
+                type(transition['sourceId']) is str and bool(transition['sourceId'].strip()),
+                'invalid native transition record')
+    require(not ('continuationQuote' in control and 'nativeTransition' in control),
+            'mixed continuation records')
     return control
 
 
@@ -441,18 +451,23 @@ def latched_result(base, control=None):
         if control is None or saved.get('epoch') == control['epoch']:
             return saved['result']
         # An epoch change alone is never authorization to bypass a prior latch.
-        require(control.get('continuationQuote') and number(control.get('continuedAt')) and
-                control['continuedAt'] > saved['result'].get('at', 0), 'SAVE requires fresh user continuation')
-        require(control['continuedAt'] <= time.time(), 'continuation cannot be in future')
+        continued = (control.get('continuedAt') if control.get('continuationQuote') else
+                     control.get('nativeTransition', {}).get('updatedAt'))
+        require(number(continued) and continued > saved['result'].get('at', 0),
+                'SAVE requires a newer continuation transition')
+        require(continued <= time.time(), 'continuation cannot be in future')
     latest = base / 'latest.json'
     if latest.exists():
         result = read(latest)
         require(type(result) is dict, 'invalid latest sample')
         if result.get('action') == 'SAVE_AND_STOP':
             epoch = result.get('policy', {}).get('epoch')
-            if control is None or epoch == control['epoch'] or not control.get('continuationQuote'):
+            if control is None or epoch == control['epoch'] or not (control.get('continuationQuote') or
+                                                                      control.get('nativeTransition')):
                 return result
-            require(control['continuedAt'] > result.get('at', 0), 'SAVE requires fresh user continuation')
+            continued = (control.get('continuedAt') if control.get('continuationQuote') else
+                         control['nativeTransition']['updatedAt'])
+            require(continued > result.get('at', 0), 'SAVE requires a newer continuation transition')
     return None
 
 
@@ -678,15 +693,25 @@ def configure(base, args, now):
     existing = load_control(base) if (base / 'control.json').exists() else None
     saved = latched_result(base, existing)
     if args.new_epoch:
-        require(args.run_id and args.continuation_quote and args.continuation_quote.strip(),
-                'new epoch requires run ID and exact fresh user continuation quote')
+        native = args.native_transition_at is not None or args.native_receipt is not None
+        require(args.run_id and (bool(args.continuation_quote and args.continuation_quote.strip()) != native),
+                'new epoch requires exactly one direct quote or native transition')
+        if native:
+            require(number(args.native_transition_at) and args.native_receipt and args.native_receipt.strip()
+                    and args.native_transition_at <= now, 'complete, past native transition required')
         require(marker_state(base)['identityState'] not in ('matched', 'unknown'),
                 'stop existing worker before new epoch')
-        require(not saved or now > saved.get('at', 0), 'continuation must follow SAVE')
+        continued = args.native_transition_at if native else now
+        require(not saved or continued > saved.get('at', 0), 'continuation must follow SAVE')
         control = default_control(args.run_id, now)
-        control.update({'continuationQuote': args.continuation_quote, 'continuedAt': now})
+        if native:
+            control['nativeTransition'] = {'updatedAt': args.native_transition_at,
+                                           'sourceId': args.native_receipt}
+        else:
+            control.update({'continuationQuote': args.continuation_quote, 'continuedAt': now})
     else:
-        require(not args.continuation_quote, 'continuation quote requires explicit new epoch')
+        require(not (args.continuation_quote or args.native_transition_at is not None or args.native_receipt),
+                'continuation evidence requires explicit new epoch')
         if saved:
             return None, saved
         control = existing or default_control(args.run_id, now)
@@ -723,6 +748,8 @@ def main(argv=None, runtime=None):
     parser.add_argument('--run-id')
     parser.add_argument('--new-epoch', action='store_true')
     parser.add_argument('--continuation-quote')
+    parser.add_argument('--native-transition-at', type=float)
+    parser.add_argument('--native-receipt')
     parser.add_argument('--ignore-weekly-quote')
     parser.add_argument('--exception-expires-at', type=float)
     parser.add_argument('--clear-exception', action='store_true')
@@ -737,7 +764,8 @@ def main(argv=None, runtime=None):
     try:
         require(args.command == 'run' or not (args.worker_epoch or args.worker_token), 'worker flags require run')
         if args.command in ('status', 'stop', 'run'):
-            require(not (args.run_id or args.new_epoch or args.continuation_quote or args.ignore_weekly_quote or
+            require(not (args.run_id or args.new_epoch or args.continuation_quote or args.native_transition_at is not None or
+                         args.native_receipt or args.ignore_weekly_quote or
                          args.exception_expires_at or args.clear_exception), 'policy flags unsupported for command')
         if args.command == 'status':
             result = status(base)
@@ -787,8 +815,14 @@ def main(argv=None, runtime=None):
                     worker_token = uuid.uuid4().hex
                     worker_argv = runtime.worker_prefix() + ['run'] if runtime is not None else [sys.executable, '-B', str(Path(__file__).resolve()), 'run', '--state-dir', str(base)]
                     worker_argv += ['--worker-epoch', control['epoch'], '--worker-token', worker_token]
-                    owned = OwnedProcess(worker_argv, stdin=subprocess.DEVNULL,
-                                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    # Keep a local traceback for an unexpected worker exit. The
+                    # health receipt intentionally stores only the error class.
+                    error_log = (base / 'worker-stderr.log').open('ab', buffering=0)
+                    try:
+                        owned = OwnedProcess(worker_argv, stdin=subprocess.DEVNULL,
+                                             stdout=subprocess.DEVNULL, stderr=error_log)
+                    finally:
+                        error_log.close()
                     try:
                         deadline = time.monotonic() + 5
                         while time.monotonic() < deadline:
@@ -818,6 +852,8 @@ def main(argv=None, runtime=None):
         print(json.dumps(result, ensure_ascii=False))
         return 0
     except (OSError, ValueError, RuntimeError, KeyError, TypeError) as error:
+        if args.command == 'run':
+            traceback.print_exc(file=sys.stderr)
         # Error class is diagnostic; never persist RPC payloads, credentials or arbitrary exception text.
         print(json.dumps({'action': 'HOLD', 'errorType': type(error).__name__, 'reason': str(error)
                           if isinstance(error, MonitorError) else 'monitor operation failed'}))

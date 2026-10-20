@@ -256,7 +256,12 @@ def watcher_command(runtime, command, *options):
 def watcher_ready(runtime, command, payload):
     options = ()
     if command == 'resume':
-        options = ('--new-epoch', '--continuation-quote', payload['authorization']['exact_quote'])
+        if payload.get('native_ui_resume') is True:
+            observation = payload['app_goal_observation']
+            options = ('--new-epoch', '--native-transition-at', str(observation['updated_at']),
+                       '--native-receipt', observation['source_id'])
+        else:
+            options = ('--new-epoch', '--continuation-quote', payload['authorization']['exact_quote'])
     watcher_command(runtime, 'start', *options)
     deadline = time.monotonic() + 45
     while True:

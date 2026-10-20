@@ -194,7 +194,7 @@ def check_field(value, kind, path):
         validate_hashes(value, path)
     elif kind == 'app_goal':
         object_fields(value, {**{key: 'text' for key in ('goal_id', 'thread_id', 'status', 'source_kind', 'source_id')}, 'observed_at': 'timestamp'},
-                      dict(objective='text', goal_created_at='timestamp'), path)
+                      dict(objective='text', goal_created_at='timestamp', updated_at='timestamp'), path)
     elif kind == 'arguments':
         # Missing fields still reach the exact prepared-arguments equality guard.
         object_fields(value, {}, dict(task_name='task_id', fork_turns='text', message='string', model='text', reasoning_effort='text'), path)
@@ -247,7 +247,7 @@ COMMAND_FIELDS = {
     'snapshot': (dict(writers_quiescent='bool', next_action='text'), {'files': 'strings'}),
     'restore': ({'destination': 'text'}, {}),
     'halt': ({**INV_FIELDS, 'owned_processes_stopped': 'bool', 'stop_evidence': 'text'}, dict(degraded='bool', reason='text', next_action='text')),
-    'resume': ({**AUTH_FIELDS, 'app_goal_observation': 'app_goal'}, {}),
+    'resume': ({'app_goal_observation': 'app_goal'}, {**AUTH_FIELDS, 'native_ui_resume': 'bool'}),
     'compact': ({}, {}), 'complete': ({}, {}), 'status': ({}, {}),
 }
 
@@ -493,7 +493,8 @@ def validate_state(s):
                  recovery_error='text', authorization_event_ids='strings', reserved_run_ids='strings', reserved_scope_ids='strings',
                  native_binding='native_binding', native_binding_ids='strings')
     compound = {'schema_version', 'tasks', 'inventory', 'usage', 'usage_errors', 'authorization_events',
-                'checkpoint', 'previous_checkpoint', 'source_watermark', 'invalidations', 'native_binding_events'}
+                'checkpoint', 'previous_checkpoint', 'source_watermark', 'invalidations', 'native_binding_events',
+                'native_resume_events'}
     for key in s:
         path = field_path('$', key)
         if key not in kinds and key not in compound:
@@ -613,6 +614,27 @@ def validate_state(s):
         require(observation['status'] == 'active' and observation['observed_at'] == binding['observed_at'], 'initial native binding observation mismatch')
         require(binding['binding_id'] == binding_ids[index] and binding['run_id'] in s.get('reserved_run_ids', [])
                 and binding['scope']['id'] in s.get('reserved_scope_ids', []), 'native binding reservation mismatch')
+    native_resumes = s.get('native_resume_events', [])
+    require(type(native_resumes) is list and (not native_resumes or len(bindings) == 1),
+            'native resume requires original native binding history')
+    resume_sources = set()
+    previous_transition = -1
+    for index, entry in enumerate(native_resumes):
+        object_fields(entry, dict(observation='app_goal', prior_observation='app_goal', halted_at='timestamp'), {}, f'$.native_resume_events[{index}]')
+        observation = entry['observation']
+        prior = entry['prior_observation']
+        validate_native_binding(bindings[0]['binding'], observation)
+        validate_native_binding(bindings[0]['binding'], prior)
+        transition = observation.get('updated_at')
+        require(prior['status'] in {'paused', 'blocked'} and prior['observed_at'] > entry['halted_at']
+                and prior['observed_at'] < observation['observed_at']
+                and prior['source_id'] != observation['source_id']
+                and observation['status'] == 'active' and type(transition) in (int, float)
+                and transition > entry['halted_at'] and transition <= observation['observed_at']
+                and transition > previous_transition and observation['source_id'] not in resume_sources,
+                'native resume transition or replay ledger invalid')
+        resume_sources.add(observation['source_id'])
+        previous_transition = transition
     require(len({entry['binding']['run_id'] for entry in bindings}) == len(bindings)
             and len({entry['binding']['scope']['id'] for entry in bindings}) == len(bindings), 'duplicate native binding run or scope')
     if 'native_binding' in s:
@@ -657,6 +679,8 @@ def validate_state(s):
                 and basis['scope'] == s['scope'], 'stored authorization identity or replay ledger mismatch')
         if s['status'] == 'active':
             authorized_at = basis['source_created_at'] if 'authorization' in s else basis['observed_at']
+            if 'native_binding' in s and native_resumes:
+                authorized_at = native_resumes[-1]['observation']['updated_at']
             boundaries = [s[key] for key in ('stopped_at', 'halted_at') if key in s]
             # A delayed but accepted stop consumes the current basis when observed.
             # Preserve its original source timestamp separately for replay checks.
@@ -1261,7 +1285,7 @@ class Workflow:
             inv = self.inventory(p)
             require(not any(a['status'] in ACTIVE for a in inv['items']), 'unresolved active children before activation')
             require(isinstance(p['slot_limit'], int) and p['slot_limit'] >= 1, 'invalid capacity')
-            history = {k: s.get(k, []) for k in ('authorization_event_ids', 'authorization_events', 'reserved_run_ids', 'reserved_scope_ids', 'native_binding_ids', 'native_binding_events')}
+            history = {k: s.get(k, []) for k in ('authorization_event_ids', 'authorization_events', 'reserved_run_ids', 'reserved_scope_ids', 'native_binding_ids', 'native_binding_events', 'native_resume_events')}
             s.clear()
             s.update(history)
             s.update(schema_version=SCHEMA_VERSION, status='active', objective=p['objective'], authorization=event, scope=event['scope'],
@@ -1577,9 +1601,32 @@ class Workflow:
             s.update(status='halted', halted_at=now, stop_evidence=p['stop_evidence'])
             return {'status': 'halted', 'recovery_verified': not p.get('degraded', False)}
         if command == 'resume':
-            require(s['status'] == 'halted', 'halted run and new user continuation required')
-            event = self.authorization_event(p, s, {'explicit_goal_continuation'}, after=max(s['halted_at'], s.get('stopped_at', 0)), matching=True)
-            app = self.app_goal(p, event, after=s['halted_at'])
+            require(s['status'] == 'halted', 'halted run and new continuation required')
+            native = p.get('native_ui_resume') is True
+            require(native != ('authorization' in p or 'interpretation' in p or 'source_message' in p),
+                    'choose exactly one native UI or direct user continuation basis')
+            if native:
+                require('native_binding' in s, 'native UI resume requires current native binding')
+                basis = s['native_binding']
+                app = self.app_goal(p, basis, after=s['halted_at'])
+                prior = s.get('app_goal_observation', {})
+                require(prior.get('status') in {'paused', 'blocked'}
+                        and prior.get('observed_at', 0) > s['halted_at']
+                        and prior['observed_at'] < app['observed_at']
+                        and prior.get('source_id') != app['source_id'],
+                        'native resume requires an observed post-halt inactive goal before active')
+                transition = app.get('updated_at')
+                boundary = max(s['halted_at'], s.get('stopped_at', 0))
+                require(type(transition) in (int, float) and transition > boundary
+                        and transition <= app['observed_at'],
+                        'native active update must follow stop and halt')
+                require(all(entry['observation']['source_id'] != app['source_id']
+                            for entry in s.get('native_resume_events', [])),
+                        'native resume observation receipt reused')
+            else:
+                require(p.get('native_ui_resume') is not False, 'native_ui_resume false is not a continuation')
+                event = self.authorization_event(p, s, {'explicit_goal_continuation'}, after=max(s['halted_at'], s.get('stopped_at', 0)), matching=True)
+                app = self.app_goal(p, event, after=s['halted_at'])
             require(app['status'] == 'active', 'helper resume cannot substitute for app goal continuation')
             require(s.get('usage', {}).get('at', 0) > s['halted_at'] and 0 <= now - s['usage']['at'] <= 300 and s['usage']['remaining'] > 20 and s['usage'].get('action') != 'SAVE_AND_STOP' and now < s['usage'].get('next_check_at', 0), 'fresh post-halt usage required')
             self.verify_checkpoint(s, current=True)
@@ -1590,11 +1637,17 @@ class Workflow:
                 if task['state'] not in TERMINAL:
                     task['state'] = 'rejected'
                     task.pop('prepared', None)
-            s.update(status='active', authorization=event, app_goal_observation=app)
-            s.pop('native_binding', None)
-            self.remember_authorization(s, event, p['interpretation'], p['source_message'])
+            s.update(status='active', app_goal_observation=app)
+            if native:
+                s.setdefault('native_resume_events', []).append(dict(observation=app, prior_observation=prior,
+                                                                      halted_at=s['halted_at']))
+            else:
+                s['authorization'] = event
+                s.pop('native_binding', None)
+                self.remember_authorization(s, event, p['interpretation'], p['source_message'])
             s.pop('recovery_error', None)
-            return {'status': 'active', 'next_action': s.get('next_action')}
+            return {'status': 'active', 'basis': 'native_ui_transition' if native else 'user_message',
+                    'next_action': s.get('next_action')}
         if command in {'compact', 'complete'}:
             require(all(t['state'] in TERMINAL for t in s['tasks'].values()), 'unfinished tasks remain')
             require(not any(v in ACTIVE for v in self.live(s).values()), 'active children remain')

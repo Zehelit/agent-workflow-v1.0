@@ -18,7 +18,7 @@ ROOT = Path(__file__).resolve().parents[3]
 MONITOR_SOURCE = ROOT / 'skills/agent-workflow-v1-0/private/limit-watcher/scripts/monitor.py'
 WORKFLOW_SOURCE = ROOT / 'skills/agent-workflow-v1-0/scripts/workflow.py'
 # Current v1.0 core pin; fixtures supply their helper explicitly.
-WORKFLOW_PIN = 'ac22523cd40953405726ea944a8ec284e0c811c8316591aa5773e9a8651363e4'
+WORKFLOW_PIN = 'e1e463b347347f214b882385f1eb46fa26de03b1dea20afaba38f69b50deb5f9'
 
 
 def load(path, name):
@@ -301,6 +301,24 @@ class MonitorTests(unittest.TestCase):
         self.assertNotEqual(result['policy']['epoch'], self.control['epoch'])
         self.assertEqual(self.m.read(self.base / 'save-latch.json')['result'], saved)
 
+    def test_new_native_transition_can_open_epoch_without_fake_user_quote(self):
+        saved = self.sample(95, at=self.now - 5)
+        self.m.latch(self.base, saved, self.control)
+        self.m.write(self.base / 'latest.json', saved)
+        stale = dict(self.control, epoch='forged',
+                     nativeTransition={'updatedAt': saved['at'], 'sourceId': 'receipt-old'})
+        with self.assertRaises(self.m.MonitorError):
+            self.m.latched_result(self.base, stale)
+        with patch.object(self.m, 'measure', return_value=windows()):
+            code, result = self.cli('once', '--new-epoch', '--run-id', 'new-run',
+                                    '--native-transition-at', str(self.now - 1),
+                                    '--native-receipt', 'receipt-new')
+        self.assertEqual(code, 0)
+        self.assertEqual(result['action'], 'CONTINUE')
+        new_control = self.m.load_control(self.base)
+        self.assertNotIn('continuationQuote', new_control)
+        self.assertEqual(new_control['nativeTransition']['sourceId'], 'receipt-new')
+
     def test_live_health_lease_sample_and_heartbeat_are_separate(self):
         self.marker()
         result = self.m.status(self.base)
@@ -446,6 +464,33 @@ class MonitorTests(unittest.TestCase):
             self.assertEqual(self.m.identity(pid)['state'], 'absent')
             print('A11_START_HANDSHAKE=' + json.dumps({'launcherPid': owners[0].proc.pid,
                   'actualWorkerPid': pid, 'startIdentity': start, 'terminal': 'explicit_stop'}), flush=True)
+        finally:
+            self.cli('stop')
+            for owner in owners:
+                owner.proc.wait(timeout=5)
+
+    def test_failed_worker_keeps_local_traceback_for_permission_diagnosis(self):
+        driver = self._file('failing-worker.py', 'import importlib.util,sys\n'
+                f's=importlib.util.spec_from_file_location("m",{str(self.monitor_path)!r});m=importlib.util.module_from_spec(s);s.loader.exec_module(m)\n'
+                'def fail_event(*args, **kwargs):\n'
+                '    raise PermissionError(13, "fixture health write denied")\n'
+                'm.event=fail_event\n'
+                'sys.exit(m.main(sys.argv[1:]))\n')
+        real_owner = self.m.OwnedProcess
+        owners = []
+        def factory(argv, **kwargs):
+            index = argv.index(str(self.monitor_path))
+            owner = real_owner([*argv[:index], str(driver), *argv[index + 1:]], **kwargs)
+            owners.append(owner)
+            return owner
+        try:
+            with patch.object(self.m, 'OwnedProcess', factory):
+                code, result = self.cli('start')
+            self.assertEqual(code, 2, result)
+            trace = (self.base/'worker-stderr.log').read_text(encoding='utf-8')
+            self.assertIn('PermissionError', trace)
+            self.assertIn('fixture health write denied', trace)
+            self.assertIn('failing-worker.py', trace)
         finally:
             self.cli('stop')
             for owner in owners:

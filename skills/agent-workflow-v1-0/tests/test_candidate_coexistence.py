@@ -95,6 +95,19 @@ class CandidateCoexistenceTests(unittest.TestCase):
         with patch.object(candidate, 'read', side_effect=read_with_health_denied):
             runtime.check_binding()
 
+    def test_native_resume_passes_transition_to_private_watcher_without_quote(self):
+        candidate = load('candidate_native_bridge', self.source)
+        runtime = object()
+        payload = {'native_ui_resume': True,
+                   'app_goal_observation': {'updated_at': 1234.5, 'source_id': 'native-receipt'}}
+        with patch.object(candidate, 'watcher_command',
+                          side_effect=[{}, {'action': 'CONTINUE', 'health': {'healthy': True}}]) as watcher:
+            result = candidate.watcher_ready(runtime, 'resume', payload)
+        self.assertTrue(result['health']['healthy'])
+        self.assertEqual(watcher.call_args_list[0].args,
+                         (runtime, 'start', '--new-epoch', '--native-transition-at', '1234.5',
+                          '--native-receipt', 'native-receipt'))
+
     def activate(self, run='candidate-run', entry=None):
         # A current model-free fixture sample keeps this test independent of the
         # machine's Codex login while exercising the real pinned worker lifecycle.
