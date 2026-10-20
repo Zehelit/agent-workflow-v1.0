@@ -73,6 +73,26 @@ class ContextAcceptanceTests(unittest.TestCase):
         self.assertEqual((result['cache_status'], result['token_measurement']), ('unknown', 'pending_N08'))
         self.assertEqual(result['state_sha256'], m.state_pin(self.state()))
 
+    def test_renderer_preserves_planned_downstream_write_chain(self):
+        app = self.root / 'app.mjs'
+        app.write_text('baseline', encoding='utf-8')
+        self.task('design', role='architect', revision='design-r1', writes=['design.md'],
+                  file_inputs=[dict(path='app.mjs', revision='baseline-r1')])
+        self.start('design')
+        (self.root / 'design.md').write_text('design', encoding='utf-8')
+        self.inv('design', status='done')
+        self.call('finish', id='design', accepted=True, evidence='accepted design')
+        self.task('implementation', revision='implementation-r1', writes=['app.mjs'],
+                  depends_on=['design'])
+        self.start('implementation')
+        app.write_text('implemented', encoding='utf-8')
+        self.inv('design', 'implementation', status='done')
+        self.task('review', role='verifier', depends_on=['design'], review_targets=[
+            dict(producer_id='implementation', revision='implementation-r1')])
+        result = self.render()
+        self.assertFalse({'TASK_CONTRACT_BLOCKED', 'INVALIDATION_COUNTEREVIDENCE'} &
+                         {item['code'] for item in result['blockers']})
+
     def test_renderer_cli_is_read_only_and_json_only_in_both_interpreters(self):
         self.task()
         before = self.engine.path.read_bytes()

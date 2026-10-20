@@ -852,9 +852,15 @@ class Workflow:
         checked = strict_json(json.dumps(s, allow_nan=False))
         artifacts, tasks = [], []
         require(len(s['tasks']) <= 256, 'bounded current task set required')
+        referenced_tasks = {dependency for task in s['tasks'].values() for dependency in task['depends_on']}
+        referenced_tasks.update(pin['producer_id'] for task in s['tasks'].values()
+                                for pin in task['review_targets'])
         for key, task in sorted(s['tasks'].items()):
             try:
-                self.check_inputs(checked, key, 'context')
+                # Revalidate from each leaf so planned descendant writes are
+                # scoped to the dependency/review branch that owns them.
+                if key not in referenced_tasks:
+                    self.check_inputs(checked, key, 'context')
                 if 'output_hashes' in task:
                     self.output_hashes(checked, key, 'context: output', task['output_hashes'])
             except Error as exc:
@@ -1002,8 +1008,27 @@ class Workflow:
             target = s['tasks'][key]
             require(item['revision'] == target['revision'] and not target.get('contract_invalid'), 'review target revision invalid')
             require(target.get('session_id') and live.get(target['session_id']) in {'idle', 'done', 'stopped'}, 'review target must stop writing first')
-            result.append(dict(producer_id=key, revision=item['revision'], output_hashes=self.output_hashes(s, key, 'assign review')))
+            expected = None
+            if target['state'] == 'accepted':
+                expected = target.get('output_hashes')
+                require(isinstance(expected, dict), 'accepted producer output pin required')
+            result.append(dict(producer_id=key, revision=item['revision'],
+                               output_hashes=self.output_hashes(s, key, 'assign review', expected)))
         return result
+
+    def task_descends_from(self, s, child, ancestor):
+        pending, seen = [child], set()
+        while pending:
+            key = pending.pop()
+            if key == ancestor:
+                return True
+            if key in seen:
+                continue
+            seen.add(key)
+            task = s['tasks'][key]
+            pending.extend(task['depends_on'])
+            pending.extend(pin['producer_id'] for pin in task['review_targets'])
+        return False
 
     def invalidate(self, s, key, reason, path='', expected=None, actual=None):
         affected = {key}
@@ -1056,8 +1081,9 @@ class Workflow:
             self.invalidate(s, key, gate + ' changed', name, expected.get(name), actual.get(name))
         return actual
 
-    def check_inputs(self, s, key, gate):
+    def check_inputs(self, s, key, gate, downstream_writes=None):
         task = s['tasks'][key]
+        downstream_writes = set() if downstream_writes is None else downstream_writes
         require(not task.get('contract_invalid'), 'task requires explicit new assignment after invalidation')
         actual_assignment = assignment_hash(task)
         if actual_assignment != task['assignment_hash']:
@@ -1067,22 +1093,40 @@ class Workflow:
                 actual = self.observed_digest(item['path'])
             except UnsafePath as exc:
                 self.invalidate(s, key, gate + ': input path unsafe', item['path'], item['sha256'], 'unsafe: ' + str(exc))
-            if actual != item['sha256'] or item['present'] != (actual is not None):
+            if (actual != item['sha256'] or item['present'] != (actual is not None)) and item['path'].casefold() not in downstream_writes:
                 self.invalidate(s, key, gate + ': file input changed', item['path'], item['sha256'], actual)
+        descendant_writes = set(downstream_writes)
+        # A claim to write does not excuse a changed upstream input before
+        # dispatch. It becomes a superseding write only after the native
+        # writer has stopped (or its result was accepted).
+        writer_quiescent = (task['state'] == 'accepted' or
+                            (task['state'] == 'running' and task.get('session_id') and
+                             self.live(s).get(task['session_id']) in {'idle', 'done', 'stopped'}))
+        if writer_quiescent:
+            descendant_writes |= {name.casefold() for name in task['writes']}
+        reviewed_writes = {}
         for pin in task['review_targets']:
             target = s['tasks'][pin['producer_id']]
             if target['revision'] != pin['revision'] or target.get('contract_invalid'):
                 self.invalidate(s, pin['producer_id'], gate + ': producer revision changed', expected=pin['revision'], actual=target['revision'])
-            # Revalidate the producer's own assignment while reviewing its output.
-            self.check_inputs(s, pin['producer_id'], gate + ': review producer')
             self.output_hashes(s, pin['producer_id'], gate + ': review target', pin['output_hashes'])
+            # The reviewed writer may intentionally replace an earlier task's
+            # input. Its pinned output is checked before that earlier pin is
+            # superseded while traversing the dependency chain.
+            target_writes = {name.casefold() for name in target['writes']}
+            reviewed_writes[pin['producer_id']] = target_writes
+            self.check_inputs(s, pin['producer_id'], gate + ': review producer', descendant_writes | target_writes)
             require(self.live(s).get(target.get('session_id')) in {'idle', 'done', 'stopped'}, 'review target must stop writing first')
         for dependency in task['depends_on']:
             target = s['tasks'][dependency]
             require(not target.get('contract_invalid'), 'dependency invalidated')
             require(target['state'] != 'accepted' or self.dependency_accepted(s, dependency),
                     'dependency lacks recorded independent acceptance')
-            self.check_inputs(s, dependency, gate + ': dependency')
+            dependency_writes = set(descendant_writes)
+            for producer_id, paths in reviewed_writes.items():
+                if self.task_descends_from(s, producer_id, dependency):
+                    dependency_writes |= paths
+            self.check_inputs(s, dependency, gate + ': dependency', dependency_writes)
             self.output_hashes(s, dependency, gate + ': dependency artifacts', target.get('output_hashes'))
 
     def verify_checkpoint(self, s, current=False):

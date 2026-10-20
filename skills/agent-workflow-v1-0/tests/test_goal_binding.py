@@ -161,6 +161,12 @@ class GoalBindingTests(unittest.TestCase):
                     '--manifest-sha256', pin, '--version', '1.0', '--project', str(self.root), '--run-id', run,
                     'workflow', 'bind-active-goal', '--input', str(source)], capture_output=True, text=True, timeout=15)
                 self.assertEqual(result.returncode, 0, result.stderr)
+                def stop_watcher(entry=entry, run=run):
+                    stopped = subprocess.run([*python, str(entry), '--manifest', str(package / 'manifest.json'),
+                        '--manifest-sha256', pin, '--version', '1.0', '--project', str(self.root), '--run-id', run,
+                        'watcher', 'stop'], capture_output=True, text=True, timeout=15)
+                    self.assertEqual(stopped.returncode, 0, stopped.stderr)
+                self.addCleanup(stop_watcher)
                 state = m.read_json(self.root / '.agent-workflow-v1-0/runs' / run / 'state.json')
                 self.assertEqual(state['native_binding']['goal_created_at'], now - 3600)
                 self.assertEqual(state['app_goal_observation']['goal_created_at'], now - 3600)

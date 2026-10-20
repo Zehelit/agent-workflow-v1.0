@@ -128,6 +128,74 @@ class InputTests(unittest.TestCase):
         receipt = self.invalidated('finish', dict(id='review', accepted=True, evidence='stale review'), 'review producer: file input changed', ['downstream', 'review', 'work'])
         self.assertEqual(receipt['path'], 'source.txt')
 
+    def test_planned_downstream_write_does_not_invalidate_design_input(self):
+        source = self.root / 'app.mjs'
+        source.write_text('baseline', encoding='utf-8')
+        self.task('design', role='architect', writes=['design.md'],
+                  file_inputs=[dict(path='app.mjs', revision='baseline-r1')])
+        self.start('design')
+        (self.root / 'design.md').write_text('change app.mjs', encoding='utf-8')
+        self.inv('design', status='done')
+        self.call('finish', id='design', accepted=True, evidence='design accepted')
+
+        self.task('implementation', writes=['app.mjs'], depends_on=['design'], revision='implementation-r1',
+                  independent_review=True)
+        self.start('implementation')
+        source.write_text('implemented', encoding='utf-8')
+        self.inv('design', 'implementation', status='done')
+        self.task('review', role='verifier', depends_on=['design'],
+                  review_targets=[dict(producer_id='implementation', revision='implementation-r1')])
+        prepared = self.call('prepare', id='review')['arguments']
+        self.call('record', id='review', submitted_arguments=prepared,
+                  session_id='review', receipt={'id': 'review'})
+        self.inv('design', 'implementation', 'review', status='done')
+        self.call('finish', id='review', accepted=True, evidence='independent review passed')
+        self.call('finish', id='implementation', accepted=True,
+                  evidence='implementation accepted', review_task='review')
+
+    def test_downstream_write_claim_does_not_hide_pre_dispatch_input_change(self):
+        source = self.root / 'app.mjs'
+        source.write_text('baseline', encoding='utf-8')
+        self.task('design', role='architect', writes=['design.md'],
+                  file_inputs=[dict(path='app.mjs', revision='baseline-r1')])
+        self.start('design')
+        (self.root / 'design.md').write_text('design', encoding='utf-8')
+        self.inv('design', status='done')
+        self.call('finish', id='design', accepted=True, evidence='design accepted')
+        self.task('implementation', writes=['app.mjs'], depends_on=['design'])
+        source.write_text('unexpected edit before dispatch', encoding='utf-8')
+        self.invalidated('prepare', dict(id='implementation'),
+                         'dependency: file input changed', ['design', 'implementation'])
+
+    def test_unrelated_review_target_write_cannot_mask_reader_input(self):
+        source = self.root / 'shared.txt'
+        source.write_text('original', encoding='utf-8')
+        self.task('reader', revision='reader-r1',
+                  file_inputs=[dict(path='shared.txt', revision='source-r1')])
+        self.start('reader')
+        self.task('writer', revision='writer-r1', writes=['shared.txt'])
+        self.start('writer')
+        source.write_text('changed by writer', encoding='utf-8')
+        self.inv('reader', 'writer', status='done')
+        self.task('review', role='verifier', review_targets=[
+            dict(producer_id='writer', revision='writer-r1'),
+            dict(producer_id='reader', revision='reader-r1')])
+        self.invalidated('prepare', dict(id='review'),
+                         'review producer: file input changed', ['reader', 'review'])
+
+    def test_accepted_output_cannot_be_repinned_after_external_change(self):
+        self.task('producer', revision='producer-r1', writes=['output.txt'])
+        self.start('producer')
+        output = self.root / 'output.txt'
+        output.write_text('accepted output', encoding='utf-8')
+        self.inv('producer', status='done')
+        self.call('finish', id='producer', accepted=True, evidence='accepted result')
+        output.write_text('external replacement', encoding='utf-8')
+        self.invalidated('task', dict(id='review', role='verifier', objective='review',
+                         criteria=['checked'], review_targets=[
+                             dict(producer_id='producer', revision='producer-r1')]),
+                         'assign review changed', ['producer'])
+
     def test_direct_apply_commits_only_invalidation_and_link_change_is_rejected(self):
         import os
         self.file_contract()
