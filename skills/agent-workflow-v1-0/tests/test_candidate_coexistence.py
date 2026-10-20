@@ -9,7 +9,9 @@ import subprocess
 import sys
 import tempfile
 import time
+from types import SimpleNamespace
 import unittest
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[3]
 PYTHON = [sys.executable, '-X', 'utf8', '-B']
@@ -70,6 +72,28 @@ class CandidateCoexistenceTests(unittest.TestCase):
 
     def state(self, run='candidate-run'):
         return self.project / '.agent-workflow-v1-0/runs' / run
+
+    def test_transient_health_read_does_not_block_binding_or_recovery(self):
+        candidate = load('candidate_health_race', self.source)
+        runtime = object.__new__(candidate.Runtime)
+        runtime.base = self.state('health-race')
+        runtime.base.mkdir(parents=True)
+        runtime.binding = {'run_id': 'health-race'}
+        runtime.args = SimpleNamespace(run_id='health-race')
+        runtime.verify_files = lambda: None
+        (runtime.base / 'run-binding.json').write_bytes(candidate.encoded(runtime.binding))
+        watcher = runtime.base / 'watcher'
+        watcher.mkdir()
+        (watcher / 'health.json').write_text('{}', encoding='utf-8')
+        original_read = candidate.read
+
+        def read_with_health_denied(path):
+            if path.name == 'health.json':
+                raise PermissionError('transient Windows read denial')
+            return original_read(path)
+
+        with patch.object(candidate, 'read', side_effect=read_with_health_denied):
+            runtime.check_binding()
 
     def activate(self, run='candidate-run', entry=None):
         # A current model-free fixture sample keeps this test independent of the

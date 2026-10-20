@@ -1,7 +1,16 @@
 # agent-workflow-v1.0
 
-Codex için görev ve ajan koordinasyonu sağlayan v1.0 kaynak paketi. Teknik skill kimliği `agent-workflow-v1-0` olur. Skill yalnız açıkça seçildiğinde kullanılır; entegre limit watcher ayrı bir skill değildir.
+Codex için bağımsız ajan koordinasyonu skill'i. Teknik kimliği `agent-workflow-v1-0` olur ve yalnız açıkça seçildiğinde kullanılır. Limit watcher aynı paketin içindedir; ayrı bir skill veya eski agent-workflow kurulumu gerektirmez.
 
-Python 3.11+ ve standart kütüphane gerekir. Kaynak testleri: `python -X utf8 -B -m unittest discover -s skills/agent-workflow-v1-0/tests`. Paket testleri: `python -X utf8 -B -m unittest discover -s tooling/tests`. Deterministik paket: `python -X utf8 -B tooling/build-candidate.py --output <yeni-boş-klasör>`.
+Python 3.11+ ve standart kütüphane yeterlidir. Kaynak ve paket testleri:
 
-Kurulum ve dış manifest pini için `skills/agent-workflow-v1-0/references/coexistence.md` belgesini izleyin. Kaynak kodu, kurulu Codex skill'ini kendiliğinden güncellemez. Geçmiş değerlendirme ve kullanıcı verileri bu depoda bulunmaz.
+```powershell
+python -X utf8 -B -m unittest discover -s skills/agent-workflow-v1-0/tests
+python -X utf8 -B -m unittest tooling/tests/test_candidate_package.py
+```
+
+Deterministik paketi `python -X utf8 -B tooling/build-candidate.py --output <yeni-boş-klasör>` ile üretin. Kurulum, dış manifest pini ve çalışma alanı bağlama kuralları [paket rehberinde](skills/agent-workflow-v1-0/references/coexistence.md) açıklanır. Kaynak değişiklikleri Codex'te kurulu paketi kendiliğinden güncellemez.
+
+Watcher etkin çalışma sırasında iki kullanım penceresini ölçer. Herhangi birinde kalan pay %20 veya altına düştüğünde yeni iş durur ve kurtarma kaydı hazırlanır. Gerçek pilot ve fayda ölçümü kaynak testlerinden ayrı kabul edilir.
+
+Değerlendirme arşivleri, kişisel koşum kayıtları ve başka projelerin depoları GitHub kaynak paketinin parçası değildir.

@@ -80,8 +80,6 @@ class CoordinationTests(unittest.TestCase):
         self.inv('/root/foreign-a', '/root/foreign-b')
         self.unchanged_failure(lambda: self.call('dispatch-start', id='work', intent_id=prepared['intent_id']))
         self.inv()
-        self.usage(81)  # Serial-only even when another reservation has no PID.
-        self.unchanged_failure(lambda: self.call('dispatch-start', id='work', intent_id=prepared['intent_id']))
         self.call('dispatch_failed', id='other', evidence='fixture never invoked native spawn', certain_not_started=True)
         self.assertEqual(self.call('dispatch-start', id='work', intent_id=prepared['intent_id'])['state'], 'uncertain')
 

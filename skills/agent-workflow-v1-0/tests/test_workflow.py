@@ -101,7 +101,8 @@ class WorkflowTests(unittest.TestCase):
     def test_checkpoint_warning_without_threshold_stop(self):
         self.now += 601
         self.assertEqual(self.usage(75)['action'], 'CHECKPOINT_SOON')
-        self.assertEqual(self.usage(80)['action'], 'SERIAL_SHORT_WORK')
+        self.assertEqual(self.usage(79)['action'], 'CHECKPOINT_SOON')
+        self.assertEqual(self.usage(80)['action'], 'SAVE_AND_STOP')
 
     def test_model_settings(self):
         self.task(role='researcher')
@@ -195,10 +196,9 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(self.call('usage')['action'], 'RETRY_USAGE_ONCE')
         self.assertEqual(self.call('usage')['action'], 'SAVE_AND_STOP')
 
-    def test_caution_serial(self):
-        self.usage(80)
-        self.task('a'); self.start('a'); self.task('b')
-        with self.assertRaises(m.Error): self.call('prepare', id='b')
+    def test_stop_threshold_blocks_new_tasks(self):
+        self.assertEqual(self.usage(80)['action'], 'SAVE_AND_STOP')
+        with self.assertRaises(m.Error): self.task('a')
 
     def test_receipt_mismatch(self):
         self.task(); self.call('prepare', id='work')

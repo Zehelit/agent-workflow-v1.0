@@ -24,7 +24,7 @@ class MonitorTests(unittest.TestCase):
     def test_threshold_ends_sampler_without_claiming_saved(self):
         with tempfile.TemporaryDirectory() as temp:
             base=Path(temp);control=m.default_control('threshold-test');m.write(base/'control.json',control)
-            windows={duration:{'windowDurationMins':duration,'usedPercent':95,'resetsAt':9999999999}
+            windows={duration:{'windowDurationMins':duration,'usedPercent':80,'resetsAt':9999999999}
                      for duration in (300,10080)}
             with patch.object(m,'measure',return_value=windows):result=m.run(base)
             self.assertFalse((base/'running.json').exists())

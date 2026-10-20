@@ -113,7 +113,7 @@ class Runtime:
             unlinked(path)
             require(path.is_file() and sha(path) == self.files[name], 'dependency missing or changed: ' + name)
 
-    def check_binding(self, include_health=True):
+    def check_binding(self):
         self.verify_files()
         unlinked(self.base)
         binding = self.base / 'run-binding.json'
@@ -125,11 +125,10 @@ class Runtime:
         if state.exists():
             require(read(state).get('run_id', self.args.run_id) == self.args.run_id, 'stored workflow run mismatch')
         watcher = self.base / 'watcher'
-        for name in ('control.json', 'running.json', 'health.json'):
-            if name == 'health.json' and not include_health:
-                # The owned worker writes this file every second. Re-reading it
-                # inside that worker races with Windows atomic replacement.
-                continue
+        # The worker replaces health.json every second. Ownership is pinned by
+        # control/running/ownership; monitor.status validates health separately
+        # and holds on read errors without blocking stop or recovery commands.
+        for name in ('control.json', 'running.json'):
             path = watcher / name
             unlinked(path)
             if path.exists():

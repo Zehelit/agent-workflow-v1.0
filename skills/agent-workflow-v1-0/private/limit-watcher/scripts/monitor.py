@@ -412,7 +412,7 @@ def sample(previous=None, control=None, measurer=None, now=None, schedule=None):
             result['policy'] = card
             result['measurementAttempts'] = attempt + 1
             result['exitReason'] = ('early_reserve' if result['action'] == 'SAVE_AND_STOP' and
-                                    result['remaining'] > 10 else 'usage_threshold' if
+                                    result['remaining'] > 20 else 'usage_threshold' if
                                     result['action'] == 'SAVE_AND_STOP' else None)
             result['errorType'] = None
             return result
@@ -582,7 +582,7 @@ def event(base, worker, state, reason=None, error_type=None, control=None):
 
 def run(base, expected_epoch=None, worker_token=None):
     if _runtime is not None:
-        _runtime.check_binding(include_health=False)
+        _runtime.check_binding()
     control = load_control(base)
     if expected_epoch is not None:
         require(control['epoch'] == expected_epoch, 'worker epoch changed')
@@ -623,7 +623,7 @@ def run(base, expected_epoch=None, worker_token=None):
         due = previous.get('next_check_at', 0) if previous and number(previous.get('at')) and 0 <= time.time() - previous['at'] <= 300 else 0
         while True:
             if _runtime is not None and time.monotonic() >= next_binding_check:
-                _runtime.check_binding(include_health=False)
+                _runtime.check_binding()
                 next_binding_check = time.monotonic() + 1
             control = load_control(base)
             require(control['epoch'] == worker['epoch'], 'worker epoch changed')

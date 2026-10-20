@@ -66,7 +66,7 @@ class MonitorIntegrationTests(unittest.TestCase):
 
     def test_frozen_dependency_usage_api(self):
         for used, action, interval in ((20, 'CONTINUE', 300), (75, 'CHECKPOINT_SOON', 60),
-                                      (80, 'SERIAL_SHORT_WORK', 30), (90, 'SAVE_AND_STOP', 30),
+                                      (79, 'CHECKPOINT_SOON', 60), (80, 'SAVE_AND_STOP', 30), (90, 'SAVE_AND_STOP', 30),
                                       (100, 'SAVE_AND_STOP', 30)):
             with self.subTest(used=used):
                 result = self.schedule(self.windows(used), self.now)
@@ -77,7 +77,7 @@ class MonitorIntegrationTests(unittest.TestCase):
         old = self.schedule(self.windows(40), self.now - 60)
         current = self.schedule(self.windows(60), self.now, old)
         self.assertEqual(current['action'], 'SAVE_AND_STOP')
-        self.assertEqual(current['estimated_seconds_to_threshold'], 90)
+        self.assertEqual(current['estimated_seconds_to_threshold'], 60)
         old['windows']['300']['resetsAt'] -= 1
         self.assertEqual(self.schedule(self.windows(60), self.now, old)['action'], 'CONTINUE')
         result = self.schedule({300: self.windows()[300]}, self.now)

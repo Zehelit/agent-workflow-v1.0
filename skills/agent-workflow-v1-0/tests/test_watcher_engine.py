@@ -18,7 +18,7 @@ ROOT = Path(__file__).resolve().parents[3]
 MONITOR_SOURCE = ROOT / 'skills/agent-workflow-v1-0/private/limit-watcher/scripts/monitor.py'
 WORKFLOW_SOURCE = ROOT / 'skills/agent-workflow-v1-0/scripts/workflow.py'
 # Current v1.0 core pin; fixtures supply their helper explicitly.
-WORKFLOW_PIN = '5c1cac915436d20d37f8b32563abfa7c7a101f421f13777361e72f25c45ba8c1'
+WORKFLOW_PIN = '2c4ef2286705d336907eb2c46e90355a37b8bc26bee1c8fe2583d35deecae2bb'
 
 
 def load(path, name):
@@ -96,13 +96,14 @@ class MonitorTests(unittest.TestCase):
             self.schedule_loader(helper=WORKFLOW_SOURCE)
 
     def test_thresholds_and_actual_two_windows(self):
-        for remaining, action in ((80, 'CONTINUE'), (25, 'CHECKPOINT_SOON'), (20, 'SERIAL_SHORT_WORK'),
+        for remaining, action in ((80, 'CONTINUE'), (25, 'CHECKPOINT_SOON'), (21, 'CHECKPOINT_SOON'), (20, 'SAVE_AND_STOP'),
                                   (10, 'SAVE_AND_STOP'), (0, 'SAVE_AND_STOP')):
             with self.subTest(remaining=remaining):
                 result = self.sample(100 - remaining)
                 self.assertEqual(result['action'], action)
                 self.assertEqual(set(result['windows']), {'300', '10080'})
         self.assertEqual(self.sample(20, 95)['exitReason'], 'usage_threshold')
+        self.assertEqual(self.sample(80, 20)['exitReason'], 'usage_threshold')
 
     def test_standalone_stop_before_start_keeps_generated_identity(self):
         (self.base / 'control.json').unlink()

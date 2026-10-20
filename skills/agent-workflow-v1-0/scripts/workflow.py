@@ -430,13 +430,12 @@ def usage_schedule(windows, observed_at, previous=None):
         rate = max(delta / elapsed, prior_rate * 0.5) if same_window and 0 < elapsed <= 600 and delta >= 0 else 0
         rates[str(key)] = rate
         if rate > 0:
-            seconds = max(0, (90 - window['usedPercent']) / rate)
+            seconds = max(0, (80 - window['usedPercent']) / rate)
             horizon = seconds if horizon is None else min(horizon, seconds)
     if horizon is not None:
         interval = min(interval, max(1, int(horizon / 4)))
     early_stop = horizon is not None and horizon <= 120
-    action = ('SAVE_AND_STOP' if remaining <= 10 or early_stop else
-              'SERIAL_SHORT_WORK' if remaining <= 20 else
+    action = ('SAVE_AND_STOP' if remaining <= 20 or early_stop else
               'CHECKPOINT_SOON' if remaining <= 25 or (horizon is not None and horizon <= 600) else 'CONTINUE')
     return dict(at=observed_at, remaining=remaining, windows={str(key): value for key, value in windows.items()}, rates=rates,
                 next_check_at=observed_at + interval, check_interval_seconds=interval,
@@ -840,7 +839,7 @@ class Workflow:
         if s['status'] != 'active': block('RUN_NOT_ACTIVE')
         usage = s.get('usage', {})
         if not (0 <= as_of - usage.get('at', -math.inf) <= 300
-                and as_of < usage.get('next_check_at', -math.inf) and usage.get('remaining', 0) > 10):
+                and as_of < usage.get('next_check_at', -math.inf) and usage.get('remaining', 0) > 20):
             block('USAGE_STALE_OR_UNAVAILABLE')
         inv = s.get('inventory', {})
         if not 0 <= as_of - inv.get('at', -math.inf) <= 60: block('INVENTORY_STALE_OR_MISSING')
@@ -924,7 +923,7 @@ class Workflow:
                 'stored authorization identity mismatch')
         self.app_goal(s, basis)
         u = s.get('usage', {})
-        require(0 <= self.clock() - u.get('at', 0) <= 300 and self.clock() < u.get('next_check_at', u.get('at', 0) + 300) and u.get('remaining', 0) > 10, 'fresh usage above threshold required')
+        require(0 <= self.clock() - u.get('at', 0) <= 300 and self.clock() < u.get('next_check_at', u.get('at', 0) + 300) and u.get('remaining', 0) > 20, 'fresh usage above threshold required')
         require(not any(t['state'] == 'uncertain' for t in s['tasks'].values()), 'reconcile uncertain dispatch first')
 
     def authorization_event(self, p, s, allowed, after=None, matching=False):
@@ -1538,7 +1537,7 @@ class Workflow:
             event = self.authorization_event(p, s, {'explicit_goal_continuation'}, after=max(s['halted_at'], s.get('stopped_at', 0)), matching=True)
             app = self.app_goal(p, event, after=s['halted_at'])
             require(app['status'] == 'active', 'helper resume cannot substitute for app goal continuation')
-            require(s.get('usage', {}).get('at', 0) > s['halted_at'] and 0 <= now - s['usage']['at'] <= 300 and s['usage']['remaining'] > 10 and s['usage'].get('action') != 'SAVE_AND_STOP' and now < s['usage'].get('next_check_at', 0), 'fresh post-halt usage required')
+            require(s.get('usage', {}).get('at', 0) > s['halted_at'] and 0 <= now - s['usage']['at'] <= 300 and s['usage']['remaining'] > 20 and s['usage'].get('action') != 'SAVE_AND_STOP' and now < s['usage'].get('next_check_at', 0), 'fresh post-halt usage required')
             self.verify_checkpoint(s, current=True)
             require(s.get('inventory', {}).get('at', 0) > s['halted_at'], 'fresh post-halt inventory required')
             require(not any(v in ACTIVE for v in self.live(s).values()), 'live children before resume')
