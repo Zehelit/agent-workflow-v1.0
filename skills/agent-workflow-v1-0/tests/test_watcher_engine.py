@@ -18,7 +18,7 @@ ROOT = Path(__file__).resolve().parents[3]
 MONITOR_SOURCE = ROOT / 'skills/agent-workflow-v1-0/private/limit-watcher/scripts/monitor.py'
 WORKFLOW_SOURCE = ROOT / 'skills/agent-workflow-v1-0/scripts/workflow.py'
 # Current v1.0 core pin; fixtures supply their helper explicitly.
-WORKFLOW_PIN = 'e1e463b347347f214b882385f1eb46fa26de03b1dea20afaba38f69b50deb5f9'
+WORKFLOW_PIN = '37a0563236e4739b272a1c0976824d7067eb301fa7897df05d9f8fc95cdef703'
 
 
 def load(path, name):

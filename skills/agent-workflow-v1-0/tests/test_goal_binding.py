@@ -157,6 +157,25 @@ class GoalBindingTests(unittest.TestCase):
                 payload['native_binding']['run_id'] = run
                 m.write_json(source, payload)
                 input_bytes = source.read_bytes()
+                common = [*python, str(entry), '--manifest', str(package / 'manifest.json'),
+                    '--manifest-sha256', pin, '--version', '1.0', '--project', str(self.root), '--run-id', run]
+                initialized = subprocess.run([*common, 'workflow', 'status'],
+                    capture_output=True, text=True, timeout=15)
+                self.assertEqual(initialized.returncode, 0, initialized.stderr)
+                # Supply fresh synthetic usage, as in the lifecycle fixtures;
+                # this clock/provenance test must not read the user's live account.
+                monitor_spec = importlib.util.spec_from_file_location('binding_fixture_monitor',
+                    package / 'private/limit-watcher/scripts/monitor.py')
+                monitor = importlib.util.module_from_spec(monitor_spec)
+                monitor_spec.loader.exec_module(monitor)
+                watcher = self.root / '.agent-workflow-v1-0/runs' / run / 'watcher'
+                watcher.mkdir(exist_ok=True)
+                control = monitor.default_control(run)
+                monitor.write(watcher / 'control.json', control)
+                windows = {key: dict(windowDurationMins=key, usedPercent=10, resetsAt=9999999999)
+                    for key in (300, 10080)}
+                monitor.write(watcher / 'latest.json', monitor.sample(control=control,
+                    measurer=lambda: windows, schedule=m.usage_schedule))
                 result = subprocess.run([*python, str(entry), '--manifest', str(package / 'manifest.json'),
                     '--manifest-sha256', pin, '--version', '1.0', '--project', str(self.root), '--run-id', run,
                     'workflow', 'bind-active-goal', '--input', str(source)], capture_output=True, text=True, timeout=15)

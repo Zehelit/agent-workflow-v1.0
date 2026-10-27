@@ -20,37 +20,40 @@ class PolicyTests(unittest.TestCase):
         self.root = Path(self.tmp.name)
         self.engine = m.Workflow(self.root, self.root / 'home')
 
-    def test_mutated_catalog_cannot_dispatch_astra_or_changed_effort(self):
+    def test_catalog_rejects_unapproved_model_low_effort_and_retired_role(self):
         original = copy.deepcopy(self.engine.catalog)
         for change in ('model', 'default', 'allowed', 'old-key'):
             with self.subTest(change=change):
                 self.engine.catalog = copy.deepcopy(original)
                 role = 'implementer'
-                if change == 'model': self.engine.catalog[role]['model'] = 'gpt-6-astra'
-                if change == 'default': self.engine.catalog[role]['model_reasoning_effort'] = 'xhigh'
-                if change == 'allowed': self.engine.catalog[role]['workflow']['efforts'] = ['high', 'max']
+                if change == 'model': self.engine.catalog[role]['model'] = 'gpt-6-luna'
+                if change == 'default': self.engine.catalog[role]['model_reasoning_effort'] = 'low'
+                if change == 'allowed': self.engine.catalog[role]['workflow']['efforts'] = ['low', 'high']
                 if change == 'old-key':
                     role = 'astra_coordinator'
                     self.engine.catalog[role] = copy.deepcopy(original['coordinator'])
                 with self.assertRaises(m.Error): self.engine.settings(role, None)
 
-    def test_frozen_disk_role_cannot_restore_astra_policy(self):
+    def test_disk_role_accepts_astra_but_rejects_unapproved_model(self):
         package = self.root / 'package'
         shutil.copytree(m.PACKAGE / 'roles', package / 'roles')
         path = package / 'roles' / 'architect.toml'
         path.write_text(path.read_text(encoding='utf-8').replace('gpt-6.1-sol', 'gpt-6-astra'), encoding='utf-8')
         with patch.object(m, 'PACKAGE', package):
+            self.assertEqual(m.roles(self.root / 'home')['architect']['model'], 'gpt-6-astra')
+            path.write_text(path.read_text(encoding='utf-8').replace('gpt-6-astra', 'gpt-6-luna'), encoding='utf-8')
             with self.assertRaises(m.Error): m.roles(self.root / 'home')
 
-    def test_limit_exception_is_exact_and_rejects_catalog_tampering(self):
+    def test_limit_role_is_terra_medium_and_rejects_catalog_tampering(self):
         package = self.root / 'watcher-package'
         shutil.copytree(m.PACKAGE / 'roles', package / 'roles')
         shutil.copytree(m.PACKAGE / 'private', package / 'private')
         with patch.object(m, 'PACKAGE', package):
             engine = m.Workflow(self.root, self.root / 'home')
-        self.assertEqual(engine.settings('limit_watcher', None), {'model': 'gpt-6-luna', 'reasoning_effort': 'low'})
+        self.assertEqual(engine.settings('limit_watcher', None), {'model': 'gpt-6.1-terra', 'reasoning_effort': 'medium'})
         self.assertEqual(engine.settings('limit_watcher', 'medium')['reasoning_effort'], 'medium')
         with self.assertRaises(m.Error): engine.settings('limit_watcher', 'high')
+        with self.assertRaises(m.Error): engine.settings('limit_watcher', 'low')
         engine.catalog['limit_watcher']['model'] = 'gpt-6.1-sol'
         with self.assertRaises(m.Error): engine.settings('limit_watcher', None)
 

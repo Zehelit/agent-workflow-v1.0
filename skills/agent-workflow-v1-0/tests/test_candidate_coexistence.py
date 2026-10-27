@@ -127,7 +127,7 @@ class CandidateCoexistenceTests(unittest.TestCase):
             observed_at=now, source_created_at=now, original_turn_id='test-turn', observed_turn_id='test-turn')
         payload = dict(objective='test', authorization=event, interpretation='test fixture authorization', source_message={key:event[key] for key in ('source_kind','source_id','exact_quote','source_created_at','original_turn_id')},
             app_goal_observation=dict(goal_id='test-goal',thread_id='test-thread',status='active',source_kind='get_goal',source_id='test-receipt',observed_at=now),
-            models={'gpt-6.1-sol':['high'],'gpt-6-luna':['low','medium']},slot_limit=4,inventory=[],observed_at=now)
+            models={'gpt-6.1-sol':['high'],'gpt-6.1-terra':['medium']},slot_limit=4,inventory=[],observed_at=now)
         self.cli('workflow','activate',run=run,entry=entry,payload=payload)
         def cleanup():
             self.cli('watcher','stop',run=run,entry=entry)
@@ -206,7 +206,11 @@ class CandidateCoexistenceTests(unittest.TestCase):
         before = hashes(self.project)
         self.cli('workflow','status',version='2.0',good=False)
         self.cli('workflow','status',pin='0'*64,good=False)
-        for name in ('scripts/workflow.py','scripts/coordination.py','roles/coordinator.toml','private/limit-watcher/scripts/monitor.py','private/limit-watcher/role.json','private/limit-watcher/limit_watcher.md','scripts/candidate.py','candidate-profile.json'):
+        for name in ('scripts/workflow.py','scripts/coordination.py','roles/coordinator.toml',
+                     'roles/coordinator/SKILL.md','roles/coordinator/MEMORY.md',
+                     'private/limit-watcher/scripts/monitor.py','private/limit-watcher/role.json',
+                     'private/limit-watcher/limit_watcher.md','private/limit-watcher/SKILL.md',
+                     'private/limit-watcher/MEMORY.md','scripts/candidate.py','candidate-profile.json'):
             path = self.package / name
             content = path.read_bytes()
             for missing in (False,True):

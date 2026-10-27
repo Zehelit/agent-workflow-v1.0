@@ -1,6 +1,6 @@
 # Pinned runtime binding and installation
 
-Technical identity: `agent-workflow-v1-0`; visible name: `agent-workflow-v1.0`; implicit invocation: false. Only explicit selection adopts this candidate. Main-client model selection remains the user's; non-limit roles require exactly Sol/high, private watcher exactly Luna low or medium. No fallback is permitted.
+Technical identity: `agent-workflow-v1-0`; visible name: `agent-workflow-v1.0`; implicit invocation: false. Only explicit selection adopts this candidate. Main-client model selection remains the user's; workflow roles permit only `gpt-6.1-sol`, `gpt-6-astra`, or `gpt-6.1-terra`, with reasoning at least `medium`. The private watcher is pinned to Terra/medium. No fallback is permitted.
 
 Build with Python 3.11+ and the standard library:
 

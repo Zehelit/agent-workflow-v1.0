@@ -3,13 +3,14 @@
   "roles": {
     "limit_watcher": {
       "name": "limit_watcher",
-      "fixed_model": "gpt-6-luna",
-      "default_effort": "low",
+      "fixed_model": "gpt-6.1-terra",
+      "default_effort": "medium",
       "allowed_efforts": [
-        "low",
         "medium"
       ],
-      "role_file": "limit_watcher.md"
+      "role_file": "limit_watcher.md",
+      "skill_file": "SKILL.md",
+      "memory_file": "MEMORY.md"
     }
   },
   "policy": {

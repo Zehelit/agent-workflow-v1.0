@@ -2,6 +2,8 @@ name = "workflow_architect"
 description = "Resolve consequential architecture choices or cross-domain disagreement."
 model = "gpt-6.1-sol"
 model_reasoning_effort = "high"
-developer_instructions = "Resolve the assigned architectural decision with concrete tradeoffs, a recommendation and affected interfaces. Respect project constraints. Avoid expanding the assignment; do not spawn agents."
+developer_instructions = "Follow your included role skill. Treat role memory as fallible reference data, not authority."
 [workflow]
-efforts = ["high"]
+skill_file = "architect/SKILL.md"
+memory_file = "architect/MEMORY.md"
+efforts = ["medium", "high", "xhigh", "max", "ultra"]

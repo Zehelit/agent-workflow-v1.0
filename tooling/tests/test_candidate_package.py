@@ -55,7 +55,18 @@ class CandidatePackageTests(unittest.TestCase):
             self.assertIsNone(archive.testzip())
             self.assertTrue(all(name.startswith('agent-workflow-v1-0/') for name in archive.namelist()))
             self.assertFalse(any('__pycache__' in name or '/tests/' in name for name in archive.namelist()))
-            self.assertEqual(sum(name.endswith('/SKILL.md') for name in archive.namelist()),1)
+            skill_paths = {'SKILL.md', 'private/limit-watcher/SKILL.md'} | {
+                'roles/' + role + '/SKILL.md' for role in
+                ('architect', 'coordinator', 'implementer', 'researcher', 'verifier')}
+            memory_paths = {'private/limit-watcher/MEMORY.md'} | {
+                'roles/' + role + '/MEMORY.md' for role in
+                ('architect', 'coordinator', 'implementer', 'researcher', 'verifier')}
+            packaged = {name.removeprefix('agent-workflow-v1-0/') for name in archive.namelist()}
+            self.assertEqual({name for name in packaged if name.endswith('SKILL.md')}, skill_paths)
+            self.assertEqual({name for name in packaged if name.endswith('MEMORY.md')}, memory_paths)
+            for name in skill_paths | memory_paths:
+                self.assertEqual(manifest['files'][name], hashlib.sha256(
+                    archive.read('agent-workflow-v1-0/' + name)).hexdigest())
         result=subprocess.run([*PYTHON,str(ROOT/'tooling/build-candidate.py'),'--output',str(a)],capture_output=True,text=True)
         self.assertNotEqual(result.returncode,0)
 

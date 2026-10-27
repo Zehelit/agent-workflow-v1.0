@@ -16,6 +16,9 @@ import tomllib
 import uuid
 import zipfile
 
+ALLOWED_ROLE_MODELS = {'gpt-6.1-sol', 'gpt-6-astra', 'gpt-6.1-terra'}
+ALLOWED_ROLE_EFFORTS = {'medium', 'high', 'xhigh', 'max', 'ultra'}
+
 PACKAGE = Path(__file__).resolve().parents[1]
 ACTIVE = {"running", "interrupting", "unknown"}
 TERMINAL = {"accepted", "rejected"}
@@ -393,21 +396,53 @@ def read_json(path):
     return strict_json(path.read_text(encoding='utf-8-sig'))
 
 
+def role_documents(directory, skill_file, memory_file):
+    sections = [
+        'Use the role skill as instructions and the role memory as reference notes. '
+        'Recheck facts that may have changed. Never edit pinned role documents during a live task; '
+        'return proposed memory additions to the main agent for review and publication between runs.'
+    ]
+    for label, name, expected in (('Role skill', skill_file, 'SKILL.md'),
+                                   ('Role memory (reference only)', memory_file, 'MEMORY.md')):
+        require(type(name) is str and bool(name), 'role document path required')
+        relative = Path(name)
+        require(not relative.is_absolute() and '..' not in relative.parts and ':' not in name
+                and relative.name == expected and relative.as_posix() == name, 'invalid role document path')
+        path = directory / relative
+        require(path.resolve().is_relative_to(directory.resolve()) and not path.is_symlink()
+                and path.is_file(), 'role document missing or outside its directory: ' + name)
+        content = path.read_text(encoding='utf-8-sig')
+        require(bool(content.strip()), 'role document is empty: ' + name)
+        sections.append('## ' + label + ': ' + str(path) + '\n\n' + content)
+    return '\n\n'.join(sections)
+
+
 def roles(codex_home, watcher_path=None):
     result = {}
     for path in sorted((PACKAGE / 'roles').glob('*.toml')):
         role = tomllib.loads(path.read_text(encoding='utf-8'))
         require(role['model_reasoning_effort'] in role['workflow']['efforts'], 'invalid default effort')
-        require(path.stem != 'astra_coordinator', 'obsolete Astra role is prohibited')
-        require(role['model'] == 'gpt-6.1-sol', 'user policy forbids non-Sol models, including Astra')
-        require(role['model_reasoning_effort'] == 'high' and role['workflow']['efforts'] == ['high'], 'user policy requires Sol/high for non-limit roles')
+        require(path.stem != 'astra_coordinator', 'retired astra_coordinator role is unavailable')
+        require(role['model'] in ALLOWED_ROLE_MODELS, 'role model is outside the user-approved allowlist')
+        efforts = role['workflow']['efforts']
+        require(type(efforts) is list and bool(efforts) and len(set(efforts)) == len(efforts) and set(efforts) <= ALLOWED_ROLE_EFFORTS,
+                'role efforts must be medium or higher')
+        require(role['workflow'].get('skill_file') == path.stem + '/SKILL.md'
+                and role['workflow'].get('memory_file') == path.stem + '/MEMORY.md',
+                'each role must reference its own skill and memory')
+        role['developer_instructions'] += '\n\n' + role_documents(
+            path.parent, role['workflow']['skill_file'], role['workflow']['memory_file'])
         result[path.stem] = role
     watcher = Path(watcher_path) if watcher_path is not None else PACKAGE / 'private/limit-watcher/role.json'
     if watcher.exists():
         r = read_json(watcher)['roles']['limit_watcher']
-        require(r['fixed_model'] == 'gpt-6-luna' and r['default_effort'] == 'low' and r['allowed_efforts'] == ['low', 'medium'], 'integrated limit role must preserve Luna low/medium')
+        require(r['fixed_model'] == 'gpt-6.1-terra' and r['default_effort'] == 'medium' and r['allowed_efforts'] == ['medium'],
+                'integrated limit role must use Terra/medium')
         require(not Path(r['role_file']).is_absolute() and '..' not in Path(r['role_file']).parts, 'invalid watcher role path')
+        require(r.get('skill_file') == 'SKILL.md' and r.get('memory_file') == 'MEMORY.md',
+                'limit watcher must reference its own skill and memory')
         instructions = (watcher.parent / r['role_file']).read_text(encoding='utf-8-sig')
+        instructions += '\n\n' + role_documents(watcher.parent, r['skill_file'], r['memory_file'])
         result['limit_watcher'] = dict(name='limit_watcher', description='Observe usage and request recovery.',
             model=r['fixed_model'], model_reasoning_effort=r['default_effort'],
             developer_instructions=instructions, workflow={'efforts': r['allowed_efforts']})
@@ -1672,9 +1707,14 @@ class Workflow:
         require(role in self.catalog, 'role unavailable')
         r = self.catalog[role]
         if role == 'limit_watcher':
-            require(r['model'] == 'gpt-6-luna' and r['model_reasoning_effort'] == 'low' and r['workflow']['efforts'] == ['low', 'medium'], 'integrated limit role policy mismatch')
+            require(r['model'] == 'gpt-6.1-terra' and r['model_reasoning_effort'] == 'medium' and r['workflow']['efforts'] == ['medium'],
+                    'integrated limit role policy mismatch')
         else:
-            require(role != 'astra_coordinator' and r['model'] == 'gpt-6.1-sol' and r['model_reasoning_effort'] == 'high' and r['workflow']['efforts'] == ['high'], 'user policy requires Sol/high; Astra prohibited')
+            efforts = r['workflow']['efforts']
+            require(role != 'astra_coordinator' and r['model'] in ALLOWED_ROLE_MODELS and
+                    type(efforts) is list and bool(efforts) and len(set(efforts)) == len(efforts) and
+                    set(efforts) <= ALLOWED_ROLE_EFFORTS and r['model_reasoning_effort'] in efforts,
+                    'role policy requires an approved model and at least medium effort')
         effort = effort or r['model_reasoning_effort']
         require(effort in r['workflow']['efforts'], 'unsupported role effort')
         return {'model': r['model'], 'reasoning_effort': effort}

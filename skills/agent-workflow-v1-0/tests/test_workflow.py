@@ -110,8 +110,10 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual((args['model'], args['reasoning_effort'], args['fork_turns']), ('gpt-6.1-sol', 'high', 'none'))
         for role in ('coordinator','architect','researcher','implementer','verifier'):
             self.assertEqual(self.engine.settings(role,None), {'model':'gpt-6.1-sol','reasoning_effort':'high'})
-            for effort in ('low','medium','xhigh','max'):
+            for effort in ('none','minimal','low'):
                 with self.assertRaises(m.Error): self.engine.settings(role,effort)
+            for effort in ('medium','xhigh','max','ultra'):
+                self.assertEqual(self.engine.settings(role,effort)['reasoning_effort'],effort)
         with self.assertRaises(m.Error): self.engine.settings('astra_coordinator',None)
 
     def test_main_has_no_model_role(self):
@@ -121,15 +123,15 @@ class WorkflowTests(unittest.TestCase):
             result=m.Workflow(d, self.engine.home).execute('activate',dict(objective='x',**authorization(now, 'x'),models={},slot_limit=4,inventory=[],observed_at=now))
             self.assertEqual(result, {'status':'active'})
 
-    def test_astra_coordination_dispatch_read_only(self):
+    def test_coordination_dispatch_read_only(self):
         with self.assertRaises(m.Error): self.task('bad',role='coordinator',writes=['a.txt'])
         self.task('plan',role='coordinator')
         args=self.call('prepare',id='plan')['arguments']
         self.assertEqual((args['model'],args['reasoning_effort'],args['fork_turns']),('gpt-6.1-sol','high','none'))
-        for effort in ('low','medium','xhigh'):
+        for effort in ('none','minimal','low'):
             with self.assertRaises(m.Error):self.engine.settings('coordinator',effort)
 
-    def test_work_waits_for_accepted_astra_plan(self):
+    def test_work_waits_for_accepted_coordination_plan(self):
         self.task('plan',role='coordinator')
         self.task('implementation',depends_on=['plan'])
         with self.assertRaises(m.Error):self.call('prepare',id='implementation')
@@ -137,21 +139,20 @@ class WorkflowTests(unittest.TestCase):
         self.call('finish',id='plan',accepted=True,evidence='bounded plan reviewed')
         self.assertEqual(self.call('prepare',id='implementation')['arguments']['model'],'gpt-6.1-sol')
 
-    def test_watcher_uses_luna_directly(self):
-        self.engine.catalog['limit_watcher'] = dict(name='limit_watcher', model='gpt-6-luna',
-            model_reasoning_effort='low',developer_instructions='Observe usage.',
-            workflow={'efforts':['low','medium']})
-        both={'gpt-5.6-terra':['low'],'gpt-6-luna':['low','medium']}
-        self.assertEqual(self.engine.settings('limit_watcher',None)['model'],'gpt-6-luna')
-        only_luna={'gpt-6-luna':['low','medium']}
+    def test_watcher_uses_terra_medium_directly(self):
+        self.engine.catalog['limit_watcher'] = dict(name='limit_watcher', model='gpt-6.1-terra',
+            model_reasoning_effort='medium',developer_instructions='Observe usage.',
+            workflow={'efforts':['medium']})
+        both={'gpt-5.6-terra':['low'],'gpt-6.1-terra':['medium']}
+        self.assertEqual(self.engine.settings('limit_watcher',None)['model'],'gpt-6.1-terra')
         state=m.read_json(self.engine.path); state['models']=both; m.write_json(self.engine.path,state)
         self.task(role='limit_watcher')
-        self.assertEqual(self.call('prepare',id='work')['arguments']['model'],'gpt-6-luna')
+        self.assertEqual(self.call('prepare',id='work')['arguments']['model'],'gpt-6.1-terra')
 
     def test_unavailable_watcher_and_other_roles_do_not_fallback(self):
-        self.engine.catalog['limit_watcher'] = dict(name='limit_watcher',model='gpt-6-luna',
-            model_reasoning_effort='low',developer_instructions='Observe usage.',
-            workflow={'efforts':['low','medium']})
+        self.engine.catalog['limit_watcher'] = dict(name='limit_watcher',model='gpt-6.1-terra',
+            model_reasoning_effort='medium',developer_instructions='Observe usage.',
+            workflow={'efforts':['medium']})
         state=m.read_json(self.engine.path); state['models']={'gpt-5.6-terra':['low']}; m.write_json(self.engine.path,state)
         self.task(role='limit_watcher')
         with self.assertRaises(m.Error): self.call('prepare',id='work')

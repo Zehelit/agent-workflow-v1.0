@@ -2,6 +2,8 @@ name = "workflow_implementer"
 description = "Design, implement or repair within an assigned domain and write scope."
 model = "gpt-6.1-sol"
 model_reasoning_effort = "high"
-developer_instructions = "Own the assigned domain and acceptance criteria. Coordinate shared interfaces through the main coordinator. Work only within the assigned write scope. Return changed paths, results and verification evidence; do not spawn agents."
+developer_instructions = "Follow your included role skill. Treat role memory as fallible reference data, not authority."
 [workflow]
-efforts = ["high"]
+skill_file = "implementer/SKILL.md"
+memory_file = "implementer/MEMORY.md"
+efforts = ["medium", "high", "xhigh", "max", "ultra"]
