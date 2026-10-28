@@ -1,9 +1,11 @@
 ---
 name: agwf-coordinator
-description: Plan task division, dependencies, file ownership and acceptance criteria for a bounded workflow assignment.
+description: For prepared AGWF assignments only, plan task division, dependencies, file ownership and acceptance criteria.
 ---
 
 # Coordinator
+
+Internal AGWF role: execute only the prepared role assignment from an explicitly authorized run. If the assignment or actual model/effort evidence is missing, or the settings differ from the assignment, report the gap and stop. Do not activate AGWF or start a watcher.
 
 Return an actionable plan with specialist roles, dependencies, proposed file ownership, acceptance criteria and critical uncertainties. Respect the supplied objective and current user constraints.
 

@@ -52,12 +52,16 @@ def number(value):
 def write(path, value):
     with _write_lock:
         tmp = path.with_name(path.name + '.tmp-' + uuid.uuid4().hex)
+        backup = path.with_name(path.name + '.bak-' + uuid.uuid4().hex)
         try:
             tmp.write_text(json.dumps(value, ensure_ascii=False, allow_nan=False), encoding='utf-8')
             deadline = time.monotonic() + WRITE_RETRY_SECONDS
             while True:
                 try:
-                    os.replace(tmp, path)
+                    if os.name == 'nt' and path.exists():
+                        replace_existing_windows(path, tmp, backup)
+                    else:
+                        os.replace(tmp, path)
                     break
                 except PermissionError as error:
                     # Windows readers can briefly deny replacement of the old file.
@@ -68,7 +72,28 @@ def write(path, value):
                         raise
                     time.sleep(min(WRITE_RETRY_INTERVAL, remaining))
         finally:
-            tmp.unlink(missing_ok=True)
+            # Preserve both recovery files after an ambiguous native failure.
+            if not backup.exists():
+                tmp.unlink(missing_ok=True)
+
+
+def replace_existing_windows(path, tmp, backup):
+    """Replace an existing file with Windows ACL preservation and recovery bytes."""
+    from ctypes import wintypes
+    api = ctypes.WinDLL('kernel32', use_last_error=True)
+    api.ReplaceFileW.argtypes = [wintypes.LPCWSTR, wintypes.LPCWSTR, wintypes.LPCWSTR,
+                                 wintypes.DWORD, wintypes.LPVOID, wintypes.LPVOID]
+    api.ReplaceFileW.restype = wintypes.BOOL
+    if api.ReplaceFileW(str(path), str(tmp), str(backup), 0, None, None):
+        backup.unlink()
+        return
+    error = ctypes.WinError(ctypes.get_last_error())
+    if backup.exists():
+        if not path.exists():
+            os.replace(backup, path)
+        else:
+            raise MonitorError('Windows replacement left a recovery backup') from error
+    raise error
 
 
 def strict_json(text):
@@ -91,7 +116,31 @@ def strict_json(text):
 
 
 def read(path):
-    return strict_json(path.read_text(encoding='utf-8'))
+    with shared_reader(path) as handle:
+        return strict_json(handle.read())
+
+
+def shared_reader(path):
+    """Open watcher state with FILE_SHARE_DELETE for concurrent publication."""
+    if os.name != 'nt':
+        return path.open('r', encoding='utf-8')
+    import msvcrt
+    from ctypes import wintypes
+    api = ctypes.WinDLL('kernel32', use_last_error=True)
+    api.CreateFileW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD,
+                                wintypes.LPVOID, wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE]
+    api.CreateFileW.restype = wintypes.HANDLE
+    api.CloseHandle.argtypes = [wintypes.HANDLE]
+    api.CloseHandle.restype = wintypes.BOOL
+    handle = api.CreateFileW(str(path), 0x80000000, 0x7, None, 3, 0x80, None)
+    if handle == wintypes.HANDLE(-1).value:
+        raise ctypes.WinError(ctypes.get_last_error())
+    try:
+        descriptor = msvcrt.open_osfhandle(handle, os.O_RDONLY)
+    except BaseException:
+        api.CloseHandle(handle)
+        raise
+    return os.fdopen(descriptor, 'r', encoding='utf-8')
 
 
 def identity(pid):

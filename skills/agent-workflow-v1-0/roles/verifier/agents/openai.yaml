@@ -1,0 +1,5 @@
+interface:
+  display_name: "AGWF Doğrulayıcı"
+  short_description: "Hazırlanmış AGWF görevini bağımsız incele"
+policy:
+  allow_implicit_invocation: false

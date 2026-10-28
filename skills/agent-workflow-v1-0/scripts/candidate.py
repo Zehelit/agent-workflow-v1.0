@@ -104,7 +104,7 @@ class Runtime:
         actual = set()
         for path in PACKAGE.rglob('*'):
             rel = path.relative_to(PACKAGE)
-            if path.is_file() and '__pycache__' not in rel.parts and path.suffix != '.pyc' and rel.parts[0] in {'SKILL.md', 'candidate-profile.json', 'agents', 'roles', 'scripts', 'references', 'private'}:
+            if path.is_file() and '__pycache__' not in rel.parts and path.suffix != '.pyc' and rel.parts[0] in {'SKILL.md', 'candidate-profile.json', 'agents', 'roles', 'scripts', 'references', 'private', 'tools'}:
                 actual.add(rel.as_posix())
         require(actual == set(self.paths) and len({name.casefold() for name in actual}) == len(actual), 'manifest dependency inventory mismatch')
         unlinked(self.manifest)
@@ -123,7 +123,7 @@ class Runtime:
             require(not self.base.exists() or not any(self.base.iterdir()), 'unbound nonempty run namespace')
         state = self.base / 'state.json'
         if state.exists():
-            require(read(state).get('run_id', self.args.run_id) == self.args.run_id, 'stored workflow run mismatch')
+            require(self.core.read_json(state).get('run_id', self.args.run_id) == self.args.run_id, 'stored workflow run mismatch')
         watcher = self.base / 'watcher'
         # The worker replaces health.json every second. Ownership is pinned by
         # control/running/ownership; monitor.status validates health separately
@@ -132,10 +132,10 @@ class Runtime:
             path = watcher / name
             unlinked(path)
             if path.exists():
-                require(read(path).get('runId') == self.args.run_id, 'watcher ownership run mismatch')
+                require(self.core.read_json(path).get('runId') == self.args.run_id, 'watcher ownership run mismatch')
         ownership = watcher / 'ownership.json'
         if ownership.exists():
-            require(read(ownership) == self.binding, 'watcher dependency ownership mismatch')
+            require(self.core.read_json(ownership) == self.binding, 'watcher dependency ownership mismatch')
 
     def bind(self):
         self.check_binding()

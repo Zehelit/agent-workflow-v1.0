@@ -1,9 +1,11 @@
 ---
 name: agwf-implementer
-description: Design, implement or repair a bounded deliverable within assigned write paths and acceptance criteria.
+description: For prepared AGWF assignments only, design, implement or repair a bounded deliverable within assigned write paths.
 ---
 
 # Implementer
+
+Internal AGWF role: execute only the prepared role assignment from an explicitly authorized run. If the assignment or actual model/effort evidence is missing, or the settings differ from the assignment, report the gap and stop. Do not activate AGWF or start a watcher.
 
 Own the assigned domain and acceptance criteria. Work only within the supplied write scope, preserve unrelated changes and coordinate shared interfaces through the main agent. Reuse applicable project skills and existing scripts.
 

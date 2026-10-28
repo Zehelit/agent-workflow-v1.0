@@ -70,6 +70,25 @@ class CandidatePackageTests(unittest.TestCase):
         result=subprocess.run([*PYTHON,str(ROOT/'tooling/build-candidate.py'),'--output',str(a)],capture_output=True,text=True)
         self.assertNotEqual(result.returncode,0)
 
+    def test_every_packaged_skill_has_its_own_explicit_invocation_policy(self):
+        try:
+            import yaml
+        except ImportError:
+            self.skipTest('PyYAML is required to parse Codex skill metadata')
+        build, receipt = self.build('invocation-policy')
+        package = build / 'agent-workflow-v1-0'
+        manifest = json.loads((package / 'manifest.json').read_bytes())
+        skills = sorted(package.rglob('SKILL.md'))
+        self.assertEqual(len(skills), 7)
+        for skill in skills:
+            with self.subTest(skill=skill.relative_to(package).as_posix()):
+                metadata = skill.parent / 'agents/openai.yaml'
+                self.assertTrue(metadata.is_file(), 'a parent skill policy does not protect this skill')
+                value = yaml.safe_load(metadata.read_text(encoding='utf-8'))
+                self.assertIs(value['policy']['allow_implicit_invocation'], False)
+                relative = metadata.relative_to(package).as_posix()
+                self.assertEqual(manifest['files'][relative], hashlib.sha256(metadata.read_bytes()).hexdigest())
+
     def test_fresh_noop_update_edited_refusal_without_archive(self):
         build,receipt=self.build('original')
         dest=self.base/'skills/agent-workflow-v1-0'

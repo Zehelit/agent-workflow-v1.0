@@ -1,0 +1,952 @@
+{
+  "type": "object",
+  "properties": {
+    "schema": {
+      "const": "n08_scoped_telemetry_v1",
+      "type": "string"
+    },
+    "runs": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "run_id": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_.:/-]{1,180}$"
+          },
+          "sources": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "source_id": {
+                  "type": "string",
+                  "pattern": "^[A-Za-z0-9_.:/-]{1,180}$"
+                },
+                "task_id": {
+                  "type": "string",
+                  "pattern": "^[A-Za-z0-9_.:/-]{1,180}$"
+                },
+                "thread_id": {
+                  "type": "string",
+                  "pattern": "^[A-Za-z0-9_.:/-]{1,180}$"
+                },
+                "session_id": {
+                  "type": "string",
+                  "pattern": "^[A-Za-z0-9_.:/-]{1,180}$"
+                },
+                "agent_path": {
+                  "type": "string",
+                  "pattern": "^[A-Za-z0-9_.:/-]{1,180}$"
+                },
+                "ranges": {
+                  "type": "array",
+                  "items": {
+                    "type": "array",
+                    "minItems": 2,
+                    "maxItems": 2,
+                    "items": {
+                      "type": "integer",
+                      "minimum": 1
+                    }
+                  },
+                  "minItems": 1
+                },
+                "pin": {
+                  "type": "object",
+                  "properties": {
+                    "source_id": {
+                      "type": "string",
+                      "pattern": "^[A-Za-z0-9_.:/-]{1,180}$"
+                    },
+                    "sha256": {
+                      "type": "string",
+                      "pattern": "^[a-f0-9]{64}$"
+                    },
+                    "scanned_prefix_bytes": {
+                      "type": "integer",
+                      "minimum": 1
+                    },
+                    "records_scanned": {
+                      "type": "integer",
+                      "minimum": 1
+                    },
+                    "later_appends_excluded": {
+                      "const": true,
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "source_id",
+                    "sha256",
+                    "scanned_prefix_bytes",
+                    "records_scanned",
+                    "later_appends_excluded"
+                  ],
+                  "additionalProperties": false
+                },
+                "requested": {
+                  "type": "object",
+                  "properties": {
+                    "model": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "effort": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "main_client_selected": {
+                      "type": "boolean"
+                    },
+                    "reason": {
+                      "type": "string",
+                      "pattern": "^[A-Za-z0-9_.:/-]{1,180}$"
+                    }
+                  },
+                  "required": [
+                    "model",
+                    "effort",
+                    "main_client_selected",
+                    "reason"
+                  ],
+                  "additionalProperties": false
+                },
+                "header": {
+                  "type": [
+                    "object",
+                    "null"
+                  ],
+                  "properties": {
+                    "thread_id": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "session_id": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "parent_thread_id": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "agent_path": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "thread_id",
+                    "session_id",
+                    "parent_thread_id",
+                    "agent_path"
+                  ],
+                  "additionalProperties": false
+                },
+                "responses": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "source_id": {
+                        "type": "string",
+                        "pattern": "^[A-Za-z0-9_.:/-]{1,180}$"
+                      },
+                      "task_id": {
+                        "type": "string",
+                        "pattern": "^[A-Za-z0-9_.:/-]{1,180}$"
+                      },
+                      "thread_id": {
+                        "type": "string",
+                        "pattern": "^[A-Za-z0-9_.:/-]{1,180}$"
+                      },
+                      "session_id": {
+                        "type": "string",
+                        "pattern": "^[A-Za-z0-9_.:/-]{1,180}$"
+                      },
+                      "turn_id": {
+                        "type": "string",
+                        "pattern": "^[A-Za-z0-9_.:/-]{1,180}$"
+                      },
+                      "response_id": {
+                        "type": "string",
+                        "pattern": "^[A-Za-z0-9_.:/-]{1,180}$"
+                      },
+                      "line": {
+                        "type": "integer",
+                        "minimum": 1
+                      },
+                      "timestamp": {
+                        "type": "string"
+                      },
+                      "usage": {
+                        "type": "object",
+                        "properties": {
+                          "input_tokens": {
+                            "type": "integer",
+                            "minimum": 0
+                          },
+                          "cached_input_tokens": {
+                            "type": "integer",
+                            "minimum": 0
+                          },
+                          "cache_write_input_tokens": {
+                            "type": "integer",
+                            "minimum": 0
+                          },
+                          "output_tokens": {
+                            "type": "integer",
+                            "minimum": 0
+                          },
+                          "reasoning_output_tokens": {
+                            "type": "integer",
+                            "minimum": 0
+                          },
+                          "total_tokens": {
+                            "type": "integer",
+                            "minimum": 0
+                          }
+                        },
+                        "required": [
+                          "input_tokens",
+                          "cached_input_tokens",
+                          "cache_write_input_tokens",
+                          "output_tokens",
+                          "reasoning_output_tokens",
+                          "total_tokens"
+                        ],
+                        "additionalProperties": false
+                      },
+                      "observed": {
+                        "type": "object",
+                        "properties": {
+                          "model": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "effort": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "effective_model": {
+                            "type": "null"
+                          },
+                          "reason": {
+                            "type": "string",
+                            "pattern": "^[A-Za-z0-9_.:/-]{1,180}$"
+                          },
+                          "context_line": {
+                            "type": [
+                              "integer",
+                              "null"
+                            ],
+                            "minimum": 1
+                          }
+                        },
+                        "required": [
+                          "model",
+                          "effort",
+                          "effective_model",
+                          "reason",
+                          "context_line"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
+                    "required": [
+                      "source_id",
+                      "task_id",
+                      "thread_id",
+                      "session_id",
+                      "turn_id",
+                      "response_id",
+                      "line",
+                      "timestamp",
+                      "usage",
+                      "observed"
+                    ],
+                    "additionalProperties": false
+                  }
+                },
+                "response_count": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "minimum": 0
+                },
+                "totals": {
+                  "type": "object",
+                  "properties": {
+                    "input_tokens": {
+                      "type": [
+                        "integer",
+                        "null"
+                      ],
+                      "minimum": 0
+                    },
+                    "cached_input_tokens": {
+                      "type": [
+                        "integer",
+                        "null"
+                      ],
+                      "minimum": 0
+                    },
+                    "cache_write_input_tokens": {
+                      "type": [
+                        "integer",
+                        "null"
+                      ],
+                      "minimum": 0
+                    },
+                    "output_tokens": {
+                      "type": [
+                        "integer",
+                        "null"
+                      ],
+                      "minimum": 0
+                    },
+                    "reasoning_output_tokens": {
+                      "type": [
+                        "integer",
+                        "null"
+                      ],
+                      "minimum": 0
+                    },
+                    "total_tokens": {
+                      "type": [
+                        "integer",
+                        "null"
+                      ],
+                      "minimum": 0
+                    },
+                    "cache_excluded_input_tokens": {
+                      "type": [
+                        "integer",
+                        "null"
+                      ],
+                      "minimum": 0
+                    }
+                  },
+                  "required": [
+                    "input_tokens",
+                    "cached_input_tokens",
+                    "cache_write_input_tokens",
+                    "output_tokens",
+                    "reasoning_output_tokens",
+                    "total_tokens",
+                    "cache_excluded_input_tokens"
+                  ],
+                  "additionalProperties": false
+                },
+                "reasons": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9_.:/-]{1,180}$"
+                  }
+                },
+                "tool_outputs": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "source_id": {
+                        "type": "string",
+                        "pattern": "^[A-Za-z0-9_.:/-]{1,180}$"
+                      },
+                      "call_id": {
+                        "type": "string",
+                        "pattern": "^[A-Za-z0-9_.:/-]{1,180}$"
+                      },
+                      "line": {
+                        "type": "integer",
+                        "minimum": 1
+                      },
+                      "timestamp": {
+                        "type": "string"
+                      },
+                      "utf8_representation_bytes": {
+                        "type": "integer",
+                        "minimum": 0
+                      },
+                      "representation": {
+                        "enum": [
+                          "raw_utf8_text",
+                          "compact_json_utf8"
+                        ],
+                        "type": "string"
+                      },
+                      "response_id": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "response_mapping_reason": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "source_id",
+                      "call_id",
+                      "line",
+                      "timestamp",
+                      "utf8_representation_bytes",
+                      "representation",
+                      "response_id",
+                      "response_mapping_reason"
+                    ],
+                    "additionalProperties": false
+                  }
+                },
+                "tool_output_utf8_representation_bytes": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "minimum": 0
+                },
+                "tool_reasons": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9_.:/-]{1,180}$"
+                  }
+                },
+                "cumulative_streams": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "stream": {
+                        "enum": [
+                          "event_msg.total_token_usage",
+                          "token_usage_record.thread_token_usage"
+                        ],
+                        "type": "string"
+                      },
+                      "observations_in_range": {
+                        "type": "integer",
+                        "minimum": 0
+                      },
+                      "delta": {
+                        "type": "null"
+                      },
+                      "reasons": {
+                        "type": "array",
+                        "items": {
+                          "type": "string",
+                          "pattern": "^[A-Za-z0-9_.:/-]{1,180}$"
+                        }
+                      }
+                    },
+                    "required": [
+                      "stream",
+                      "observations_in_range",
+                      "delta",
+                      "reasons"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "minItems": 2,
+                  "maxItems": 2
+                }
+              },
+              "required": [
+                "source_id",
+                "task_id",
+                "thread_id",
+                "session_id",
+                "agent_path",
+                "ranges",
+                "pin",
+                "requested",
+                "header",
+                "responses",
+                "response_count",
+                "totals",
+                "reasons",
+                "tool_outputs",
+                "tool_output_utf8_representation_bytes",
+                "tool_reasons",
+                "cumulative_streams"
+              ],
+              "additionalProperties": false
+            },
+            "minItems": 1
+          },
+          "response_count": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0
+          },
+          "totals": {
+            "type": "object",
+            "properties": {
+              "input_tokens": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "minimum": 0
+              },
+              "cached_input_tokens": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "minimum": 0
+              },
+              "cache_write_input_tokens": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "minimum": 0
+              },
+              "output_tokens": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "minimum": 0
+              },
+              "reasoning_output_tokens": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "minimum": 0
+              },
+              "total_tokens": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "minimum": 0
+              },
+              "cache_excluded_input_tokens": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "minimum": 0
+              }
+            },
+            "required": [
+              "input_tokens",
+              "cached_input_tokens",
+              "cache_write_input_tokens",
+              "output_tokens",
+              "reasoning_output_tokens",
+              "total_tokens",
+              "cache_excluded_input_tokens"
+            ],
+            "additionalProperties": false
+          },
+          "tool_output_utf8_representation_bytes": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0
+          },
+          "reasons": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_.:/-]{1,180}$"
+            }
+          },
+          "coverage_gaps": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_.:/-]{1,180}$"
+            }
+          },
+          "coverage_complete": {
+            "type": "boolean"
+          },
+          "phases": {
+            "type": "object",
+            "properties": {
+              "intervals": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "phase": {
+                      "enum": [
+                        "implementation",
+                        "repair",
+                        "independent_review",
+                        "external_wait",
+                        "closure"
+                      ],
+                      "type": "string"
+                    },
+                    "task_id": {
+                      "type": "string",
+                      "pattern": "^[A-Za-z0-9_.:/-]{1,180}$"
+                    },
+                    "source_id": {
+                      "type": "string",
+                      "pattern": "^[A-Za-z0-9_.:/-]{1,180}$"
+                    },
+                    "start": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "end": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "authority": {
+                      "type": "string",
+                      "pattern": "^[A-Za-z0-9_.:/-]{1,180}$"
+                    },
+                    "duration_seconds": {
+                      "type": [
+                        "number",
+                        "null"
+                      ],
+                      "minimum": 0
+                    },
+                    "reason": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "phase",
+                    "task_id",
+                    "source_id",
+                    "start",
+                    "end",
+                    "authority",
+                    "duration_seconds",
+                    "reason"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "observed_wall_union_seconds": {
+                "type": [
+                  "number",
+                  "null"
+                ],
+                "minimum": 0
+              },
+              "observed_agent_interval_seconds_sum": {
+                "type": [
+                  "number",
+                  "null"
+                ],
+                "minimum": 0
+              },
+              "agent_active_seconds_sum": {
+                "type": "null"
+              },
+              "agent_active_reason": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9_.:/-]{1,180}$",
+                "const": "lifecycle_intervals_do_not_attest_active_compute_time"
+              },
+              "complete_wall_union_seconds": {
+                "type": [
+                  "number",
+                  "null"
+                ],
+                "minimum": 0
+              },
+              "missing_phase_types": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "pattern": "^[A-Za-z0-9_.:/-]{1,180}$"
+                }
+              },
+              "reasons": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "pattern": "^[A-Za-z0-9_.:/-]{1,180}$"
+                }
+              }
+            },
+            "required": [
+              "intervals",
+              "observed_wall_union_seconds",
+              "observed_agent_interval_seconds_sum",
+              "agent_active_seconds_sum",
+              "agent_active_reason",
+              "complete_wall_union_seconds",
+              "missing_phase_types",
+              "reasons"
+            ],
+            "additionalProperties": false
+          },
+          "cost": {
+            "type": "object",
+            "properties": {
+              "amount": {
+                "type": "null"
+              },
+              "currency": {
+                "type": "null"
+              },
+              "reason": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9_.:/-]{1,180}$",
+                "const": "provider_billing_metadata_unavailable"
+              }
+            },
+            "required": [
+              "amount",
+              "currency",
+              "reason"
+            ],
+            "additionalProperties": false
+          },
+          "cache_miss_cause": {
+            "type": "null"
+          },
+          "cache_miss_cause_reason": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_.:/-]{1,180}$",
+            "const": "native_cache_cause_not_observed"
+          }
+        },
+        "required": [
+          "run_id",
+          "sources",
+          "response_count",
+          "totals",
+          "tool_output_utf8_representation_bytes",
+          "reasons",
+          "coverage_gaps",
+          "coverage_complete",
+          "phases",
+          "cost",
+          "cache_miss_cause",
+          "cache_miss_cause_reason"
+        ],
+        "additionalProperties": false
+      },
+      "minItems": 1
+    },
+    "comparisons": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "left_run_id": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_.:/-]{1,180}$"
+          },
+          "right_run_id": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_.:/-]{1,180}$"
+          },
+          "observed_wall_union_seconds_change": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "raw_total_tokens_change": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "cost_amount_change": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "faster_but_more_raw_tokens": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "faster_but_more_costly": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "economic_acceptance": {
+            "const": false,
+            "type": "boolean"
+          },
+          "reason": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_.:/-]{1,180}$"
+          }
+        },
+        "required": [
+          "left_run_id",
+          "right_run_id",
+          "observed_wall_union_seconds_change",
+          "raw_total_tokens_change",
+          "cost_amount_change",
+          "faster_but_more_raw_tokens",
+          "faster_but_more_costly",
+          "economic_acceptance",
+          "reason"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "checks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "check_id": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_.:/-]{1,180}$"
+          },
+          "passed": {
+            "type": "boolean"
+          },
+          "expected_response_count": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0
+          },
+          "observed_response_count": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0
+          },
+          "expected_tool_output_bytes": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0
+          },
+          "observed_tool_output_bytes": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0
+          },
+          "reason": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_.:/-]{1,180}$"
+          }
+        },
+        "required": [
+          "check_id",
+          "passed",
+          "expected_response_count",
+          "observed_response_count",
+          "expected_tool_output_bytes",
+          "observed_tool_output_bytes",
+          "reason"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "evidence_pins": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "source_id": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_.:/-]{1,180}$"
+          },
+          "sha256": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$"
+          },
+          "scanned_prefix_bytes": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "records_scanned": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "later_appends_excluded": {
+            "const": true,
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "source_id",
+          "sha256",
+          "scanned_prefix_bytes",
+          "records_scanned",
+          "later_appends_excluded"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "independent_acceptance": {
+      "const": false,
+      "type": "boolean"
+    },
+    "limitations": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "pattern": "^[A-Za-z0-9_.:/-]{1,180}$"
+      }
+    }
+  },
+  "required": [
+    "schema",
+    "runs",
+    "comparisons",
+    "checks",
+    "evidence_pins",
+    "independent_acceptance",
+    "limitations"
+  ],
+  "additionalProperties": false,
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:agent-workflow:n08:telemetry:v1",
+  "title": "N08 closed scoped telemetry metadata",
+  "description": "Closed structural schema; extract and publish additionally enforce public arithmetic, source joins, phase unions, completeness and null/reason semantics with semantic_validate."
+}

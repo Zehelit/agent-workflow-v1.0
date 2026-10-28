@@ -96,7 +96,7 @@ class ContextAcceptanceTests(unittest.TestCase):
     def test_renderer_cli_is_read_only_and_json_only_in_both_interpreters(self):
         self.task()
         before = self.engine.path.read_bytes()
-        source = Path(__file__).resolve().parents[3] / 'tooling/render-active-run.py'
+        source = Path(__file__).resolve().parents[1] / 'tools/render-active-run.py'
         argv = [sys.executable, '-X', 'utf8', '-B'] + (['-O'] if sys.flags.optimize else []) + [str(source),
                 '--project', str(self.root), '--codex-home', str(self.engine.home),
                 '--references', str(self.manifest), '--as-of', str(self.now)]
@@ -276,7 +276,7 @@ class ContextAcceptanceTests(unittest.TestCase):
         self.reject('finish', id='work', accepted=True, review_task='review', evidence='accept')
 
     def test_renderer_missing_and_schema1_state_rejects_without_write(self):
-        source = Path(__file__).resolve().parents[3] / 'tooling/render-active-run.py'
+        source = Path(__file__).resolve().parents[1] / 'tools/render-active-run.py'
         argv = [sys.executable, '-X', 'utf8', '-B'] + (['-O'] if sys.flags.optimize else []) + [str(source),
                 '--project', str(self.root), '--codex-home', str(self.engine.home),
                 '--references', str(self.manifest), '--as-of', str(self.now)]

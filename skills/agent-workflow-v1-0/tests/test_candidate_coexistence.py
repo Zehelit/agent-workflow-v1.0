@@ -27,7 +27,9 @@ def hashes(root):
 
 
 def stable_state_hashes(root):
-    return {name: value for name, value in hashes(root).items() if not name.startswith('watcher/')}
+    return {p.relative_to(root).as_posix(): hashlib.sha256(p.read_bytes()).hexdigest()
+            for p in root.rglob('*') if p.is_file()
+            and not p.relative_to(root).as_posix().startswith('watcher/')}
 
 class CandidateCoexistenceTests(unittest.TestCase):
     def setUp(self):
@@ -56,6 +58,17 @@ class CandidateCoexistenceTests(unittest.TestCase):
 
     def assert_preserved(self):
         self.assertEqual((hashes(self.old), hashes(self.home)), self.preserved)
+
+    def test_packaged_read_only_tools_use_only_installed_dependencies(self):
+        files = json.loads(self.manifest.read_text(encoding='utf-8'))['files']
+        for name in ('render-active-run.py', 'extract-usage.py', 'telemetry.schema.json'):
+            self.assertIn('tools/' + name, files)
+        renderer = load('packaged_renderer', self.package / 'tools/render-active-run.py')
+        self.assertEqual(renderer.SOURCE, self.package / 'scripts/workflow.py')
+        extractor = load('packaged_extractor', self.package / 'tools/extract-usage.py')
+        with self.assertRaises(extractor.Invalid) as failure:
+            extractor.schema_validate({})
+        self.assertEqual(str(failure.exception), 'schema_required')
 
     def cli(self, *command, entry=None, run='candidate-run', manifest=None, pin=None, version='1.0', payload=None, raw=None, good=True, env_overrides=None):
         env = dict(os.environ, CODEX_HOME=str(self.home), PYTHONDONTWRITEBYTECODE='1')

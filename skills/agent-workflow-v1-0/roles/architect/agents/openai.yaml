@@ -1,0 +1,5 @@
+interface:
+  display_name: "AGWF Mimar"
+  short_description: "Hazırlanmış AGWF görevi için mimari karar"
+policy:
+  allow_implicit_invocation: false

@@ -1,0 +1,5 @@
+interface:
+  display_name: "AGWF Limit Değerlendirici"
+  short_description: "Hazırlanmış AGWF görevinde limit kanıtını değerlendir"
+policy:
+  allow_implicit_invocation: false

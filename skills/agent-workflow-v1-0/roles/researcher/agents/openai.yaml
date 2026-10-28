@@ -1,0 +1,5 @@
+interface:
+  display_name: "AGWF Araştırmacı"
+  short_description: "Hazırlanmış AGWF görevi için kaynak araştır"
+policy:
+  allow_implicit_invocation: false

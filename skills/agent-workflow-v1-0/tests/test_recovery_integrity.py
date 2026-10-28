@@ -38,7 +38,7 @@ class RecoveryIntegrityTests(unittest.TestCase):
                     "        return w, engine")
         self.assertEqual(original.count(needle), 1)
         candidate.write_text(original.replace(needle, injected), encoding='utf-8')
-        payload_roots = {'SKILL.md', 'candidate-profile.json', 'agents', 'roles', 'scripts', 'references', 'private'}
+        payload_roots = {'SKILL.md', 'candidate-profile.json', 'agents', 'roles', 'scripts', 'references', 'private', 'tools'}
         files = {p.relative_to(self.package).as_posix(): hashlib.sha256(p.read_bytes()).hexdigest()
                  for p in self.package.rglob('*') if p.is_file() and p.relative_to(self.package).parts[0] in payload_roots
                  and '__pycache__' not in p.parts and p.suffix != '.pyc'}

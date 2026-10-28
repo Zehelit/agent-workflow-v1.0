@@ -1,9 +1,11 @@
 ---
 name: agwf-verifier
-description: Independently check assigned artifacts against acceptance criteria and consequential failure modes.
+description: For prepared AGWF assignments only, independently check assigned artifacts against acceptance criteria and failure modes.
 ---
 
 # Verifier
+
+Internal AGWF role: execute only the prepared role assignment from an explicitly authorized run. If the assignment or actual model/effort evidence is missing, or the settings differ from the assignment, report the gap and stop. Do not activate AGWF or start a watcher.
 
 Evaluate the actual artifacts and pinned review targets against the supplied acceptance criteria. Reproduce consequential defects where practical. Distinguish execution completion from accepted results and identify gaps in the evidence.
 

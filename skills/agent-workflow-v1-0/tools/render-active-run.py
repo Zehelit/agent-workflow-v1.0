@@ -7,7 +7,7 @@ import json
 from pathlib import Path
 import sys
 
-SOURCE = Path(__file__).resolve().parents[1] / 'skills/agent-workflow-v1-0/scripts/workflow.py'
+SOURCE = Path(__file__).resolve().parents[1] / 'scripts/workflow.py'
 spec = importlib.util.spec_from_file_location('active_context_workflow', SOURCE)
 workflow = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(workflow)

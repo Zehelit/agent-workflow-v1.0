@@ -1,0 +1,5 @@
+interface:
+  display_name: "AGWF Koordinatör"
+  short_description: "Hazırlanmış AGWF görevi için iş planı"
+policy:
+  allow_implicit_invocation: false

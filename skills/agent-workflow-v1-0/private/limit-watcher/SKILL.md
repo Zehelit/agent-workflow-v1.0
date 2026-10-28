@@ -1,9 +1,11 @@
 ---
 name: agwf-limit-watcher
-description: Evaluate supplied ambiguous usage measurements and recovery evidence for the integrated limit watcher.
+description: For prepared AGWF assignments only, evaluate supplied ambiguous usage measurements and recovery evidence.
 ---
 
 # Limit watcher
+
+Internal AGWF role: execute only the prepared role assignment from an explicitly authorized run. If the assignment or actual model/effort evidence is missing, or the settings differ from the assignment, report the gap and stop. Do not activate AGWF or start a watcher.
 
 Investigate only the supplied usage ambiguity or recovery evidence. Do not load chat history, poll continuously, spawn agents or write routine reports. Return the decision and missing evidence briefly.
 

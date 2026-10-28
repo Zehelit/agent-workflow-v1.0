@@ -20,7 +20,7 @@ def payload_sources(source):
     files = {}
     for path in sorted(package.rglob('*')):
         rel = path.relative_to(package)
-        if path.is_file() and '__pycache__' not in rel.parts and path.suffix != '.pyc' and rel.parts[0] in {'SKILL.md', 'candidate-profile.json', 'agents', 'roles', 'scripts', 'references', 'private'}:
+        if path.is_file() and '__pycache__' not in rel.parts and path.suffix != '.pyc' and rel.parts[0] in {'SKILL.md', 'candidate-profile.json', 'agents', 'roles', 'scripts', 'references', 'private', 'tools'}:
             files[rel.as_posix()] = path
     return files
 

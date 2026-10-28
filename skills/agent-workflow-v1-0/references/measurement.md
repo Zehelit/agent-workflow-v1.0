@@ -5,7 +5,7 @@ quota consumption or prices. Producer tests and metadata reconstruction require
 independent consequential review before acceptance. Fresh versus long context,
 cache behavior, matched economic trials and installed adoption are separate gates.
 
-Run `python -X utf8 -B tooling/extract-usage.py --manifest MANIFEST --output NEW_JSON`.
+Run `python -X utf8 -B tools/extract-usage.py --manifest MANIFEST --output NEW_JSON` from the skill directory in either the source checkout or installation. The tool and `tools/telemetry.schema.json` are pinned in the skill manifest.
 The API is `extract(manifest)` and `publish(document, new_path, canaries=())`.
 Outputs are canonical UTF-8 JSON with sorted keys, compact separators and one LF.
 Existing output files are never overwritten. `--canary-file` reads a private JSON
@@ -79,19 +79,6 @@ Known phase endpoints must be valid timestamps even when the other endpoint is
 missing; missing capture still gives a null duration.
 The observed union is not the elapsed duration of an unobserved complete project.
 
-`--actual-project PROJECT` reconstructs the accepted R5 proof pins and exact root
-response ID sets and bytes from native pinned prefixes. It separately locates the
-two R5 children using exact parent/thread-spawn headers and native spawn arguments.
-It also samples the completed G2 slice of the current implementation run: main,
-four implementation/review/repair children, captured waits, and ledger-finish to
-emitting-output closure. Child headers are discovered only in the two specified
-date directories, with exact parent and agent-path matching. Filenames/titles do
-not establish child identity. Run/task receipts in the pinned events ledger join
-to those headers. Root setup outside the slice, main phase partition, monitor
-repair outside the slice and later N08 implementation/review/closure remain explicit
-coverage gaps. R5 narrow 16/9 counts exclude children and closure; their separate
-reports must not be mistaken for complete matched economic runs.
-
 For a forthcoming same-job native fresh compact versus public long-history pair,
 root builds a manifest with two distinct run IDs, each arm's main marker range and
 exact child-header sources, captured implementation/repair/review/wait/closure
@@ -121,9 +108,5 @@ not use assertions as production validation. Actual evidence pins identify exact
 scanned prefixes, not a mutable whole-file claim. Metadata pins authenticate bytes,
 not provider billing, receipt authenticity or effective model claims.
 
-N08 r1 independent review rejected five publication/coverage/duplicate boundaries;
-the original report, probe, pins and bounded actual evidence are preserved in
-`operations/agent-workflow1.0-implementation-20261008/n08-independent-r1.*` and
-`n08-producer-handoff.md`. The separately pinned r2 producer evidence repairs those
-boundaries and replays the original prefix scopes. Independent r2 acceptance and
-native N06/N15/N16 measurement/adoption gates remain pending.
+Historical evaluations are not a dependency of this tool. Each new measurement
+must supply its own pinned manifest and receive independent acceptance.

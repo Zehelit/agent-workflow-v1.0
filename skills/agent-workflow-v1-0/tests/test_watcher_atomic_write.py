@@ -59,6 +59,17 @@ class AtomicWriteTests(unittest.TestCase):
         self.assert_no_temp()
 
     @unittest.skipUnless(os.name == 'nt', 'Windows sharing semantics')
+    def test_internal_reader_can_overlap_atomic_replace(self):
+        with m.shared_reader(self.path) as handle:
+            self.assertEqual(handle.read(), self.old.decode('utf-8'))
+            m.write(self.path, {'state':'new'})
+            handle.seek(0)
+            self.assertEqual(handle.read(), self.old.decode('utf-8'))
+        self.assertEqual(json.loads(self.path.read_text()), {'state':'new'})
+        self.assertEqual(list(self.base.glob('health.json.bak-*')), [])
+        self.assert_no_temp()
+
+    @unittest.skipUnless(os.name == 'nt', 'Windows sharing semantics')
     def test_actual_permanent_reader_fails_bounded_and_preserves_old_bytes(self):
         started = time.monotonic()
         with self.path.open('r'):
@@ -72,7 +83,8 @@ class AtomicWriteTests(unittest.TestCase):
 
     def test_unclassified_permission_error_is_not_retried(self):
         error = PermissionError('not a known Windows sharing error')
-        with patch.object(m.os, 'replace', side_effect=error) as replace:
+        target, name = (m, 'replace_existing_windows') if os.name == 'nt' else (m.os, 'replace')
+        with patch.object(target, name, side_effect=error) as replace:
             with self.assertRaises(PermissionError):
                 m.write(self.path, {'state':'new'})
         self.assertEqual(replace.call_count, 1)
@@ -80,7 +92,8 @@ class AtomicWriteTests(unittest.TestCase):
         self.assert_no_temp()
 
     def test_nonpermission_io_error_is_not_retried(self):
-        with patch.object(m.os, 'replace', side_effect=OSError('disk unavailable')) as replace:
+        target, name = (m, 'replace_existing_windows') if os.name == 'nt' else (m.os, 'replace')
+        with patch.object(target, name, side_effect=OSError('disk unavailable')) as replace:
             with self.assertRaises(OSError):
                 m.write(self.path, {'state':'new'})
         self.assertEqual(replace.call_count, 1)

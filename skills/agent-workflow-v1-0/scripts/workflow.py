@@ -16,6 +16,8 @@ import tomllib
 import uuid
 import zipfile
 
+WRITE_RETRY_SECONDS = 0.5
+WRITE_RETRY_INTERVAL = 0.01
 ALLOWED_ROLE_MODELS = {'gpt-6.1-sol', 'gpt-6-astra', 'gpt-6.1-terra'}
 ALLOWED_ROLE_EFFORTS = {'medium', 'high', 'xhigh', 'max', 'ultra'}
 
@@ -318,8 +320,51 @@ def remove_owned_tree(path, boundary):
 def digest(path):
     if not path.is_file():
         return None
-    with path.open('rb') as stream:
+    with shared_binary(path) as stream:
         return hashlib.file_digest(stream, 'sha256').hexdigest()
+
+
+def shared_binary(path):
+    """Read a state file without denying an atomic Windows replacement."""
+    if os.name != 'nt':
+        return path.open('rb')
+    import ctypes
+    import msvcrt
+    from ctypes import wintypes
+    api = ctypes.WinDLL('kernel32', use_last_error=True)
+    api.CreateFileW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD,
+                                wintypes.LPVOID, wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE]
+    api.CreateFileW.restype = wintypes.HANDLE
+    api.CloseHandle.argtypes = [wintypes.HANDLE]
+    handle = api.CreateFileW(str(path), 0x80000000, 0x7, None, 3, 0x80, None)
+    if handle == wintypes.HANDLE(-1).value:
+        raise ctypes.WinError(ctypes.get_last_error())
+    try:
+        descriptor = msvcrt.open_osfhandle(handle, os.O_RDONLY | os.O_BINARY)
+    except BaseException:
+        api.CloseHandle(handle)
+        raise
+    return os.fdopen(descriptor, 'rb')
+
+
+def replace_existing_windows(path, temp, backup):
+    """Publish complete state while retaining Windows ACLs and recovery bytes."""
+    import ctypes
+    from ctypes import wintypes
+    api = ctypes.WinDLL('kernel32', use_last_error=True)
+    api.ReplaceFileW.argtypes = [wintypes.LPCWSTR, wintypes.LPCWSTR, wintypes.LPCWSTR,
+                                 wintypes.DWORD, wintypes.LPVOID, wintypes.LPVOID]
+    api.ReplaceFileW.restype = wintypes.BOOL
+    if api.ReplaceFileW(str(path), str(temp), str(backup), 0, None, None):
+        backup.unlink()
+        return
+    error = ctypes.WinError(ctypes.get_last_error())
+    if backup.exists():
+        if not path.exists():
+            os.replace(backup, path)
+        else:
+            raise Error('Windows state replacement left a recovery backup') from error
+    raise error
 
 
 def cut(fault, point, path):
@@ -379,6 +424,7 @@ def write_json(path, data, fault=None):
     encoded = json_file_bytes(data)
     path.parent.mkdir(parents=True, exist_ok=True)
     temp = path.with_name(path.name + '.tmp-' + uuid.uuid4().hex)
+    backup = path.with_name(path.name + '.bak-' + uuid.uuid4().hex)
     try:
         cut(fault, 'temp.before', path)
         temp.write_bytes(encoded)
@@ -386,14 +432,28 @@ def write_json(path, data, fault=None):
         # Detect a truncated candidate before it can replace the good copy.
         require(read_json(temp) == data, 'temporary JSON verification failed')
         cut(fault, 'replace.before', path)
-        os.replace(temp, path)
+        deadline = time.monotonic() + WRITE_RETRY_SECONDS
+        while True:
+            try:
+                if os.name == 'nt' and path.exists():
+                    replace_existing_windows(path, temp, backup)
+                else:
+                    os.replace(temp, path)
+                break
+            except PermissionError as error:
+                remaining = deadline - time.monotonic()
+                if os.name != 'nt' or getattr(error, 'winerror', None) not in (5, 32, 33) or remaining <= 0:
+                    raise
+                time.sleep(min(WRITE_RETRY_INTERVAL, remaining))
         cut(fault, 'replace.after', path)
     finally:
-        temp.unlink(missing_ok=True)
+        if not backup.exists():
+            temp.unlink(missing_ok=True)
 
 
 def read_json(path):
-    return strict_json(path.read_text(encoding='utf-8-sig'))
+    with shared_binary(path) as stream:
+        return strict_json(stream.read().decode('utf-8-sig'))
 
 
 def role_documents(directory, skill_file, memory_file):

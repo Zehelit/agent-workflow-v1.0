@@ -1,0 +1,5 @@
+interface:
+  display_name: "AGWF Uygulayıcı"
+  short_description: "Hazırlanmış AGWF görevini uygula ve doğrula"
+policy:
+  allow_implicit_invocation: false
