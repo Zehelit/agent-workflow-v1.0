@@ -259,7 +259,7 @@ def watcher_command(runtime, command, *options):
     return result
 
 
-def watcher_ready(runtime, command, payload):
+def watcher_ready(runtime, command, payload, usage_input=None):
     options = ()
     if command == 'resume':
         if payload.get('native_ui_resume') is True:
@@ -268,6 +268,8 @@ def watcher_ready(runtime, command, payload):
                        '--native-receipt', observation['source_id'])
         else:
             options = ('--new-epoch', '--continuation-quote', payload['authorization']['exact_quote'])
+    if usage_input:
+        options += ('--usage-input', str(usage_input))
     watcher_command(runtime, 'start', *options)
     deadline = time.monotonic() + 45
     while True:
@@ -328,7 +330,8 @@ def watcher_summary(sample):
     return {'action': sample.get('action'), 'remaining': sample.get('remaining'),
             'healthy': sample.get('health', {}).get('healthy', False),
             'exitReason': sample.get('health', {}).get('exitReason'),
-            'errorType': sample.get('health', {}).get('errorType')}
+            'errorType': sample.get('health', {}).get('errorType'),
+            'diagnosticCode': sample.get('diagnosticCode')}
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
@@ -341,8 +344,10 @@ def main(argv=None):
     workflow = sub.add_parser('workflow')
     workflow.add_argument('command')
     workflow.add_argument('--input')
+    workflow.add_argument('--usage-input', help='Fresh receipt from the existing Codex usage tool')
     coordination = sub.add_parser('coordination')
     coordination.add_argument('--input', required=True)
+    coordination.add_argument('--usage-input')
     watcher = sub.add_parser('watcher')
     watcher.add_argument('watcher_args', nargs=argparse.REMAINDER)
     install = sub.add_parser('install')
@@ -366,6 +371,8 @@ def main(argv=None):
                 commands = {step.get('command') for step in request['steps'] if type(step) is dict}
                 require(not commands & (ACTIVATION_COMMANDS | TERMINAL_COMMANDS),
                         'lifecycle transitions require direct workflow command')
+                if args.usage_input:
+                    watcher_command(runtime, 'ingest', '--usage-input', args.usage_input)
                 if active_state(engine):
                     sample = renew_for_work(runtime, 'status' if commands <= RECOVERY_COMMANDS else 'coordination')
                 else:
@@ -377,7 +384,7 @@ def main(argv=None):
                 print(json.dumps(result, ensure_ascii=False))
                 return 1 if result['blocker'] else 0
             if args.command == 'validate':
-                require(not args.input, 'validate takes no input')
+                require(not args.input and not args.usage_input, 'validate takes no input')
                 result = dict(identity=IDENTITY, version=VERSION, run_id=args.run_id, state_base=str(engine.base), manifest_sha256=runtime.pin,
                     roles={name: engine.settings(name, None) for name in engine.catalog}, missing_dependencies=[])
             else:
@@ -386,13 +393,15 @@ def main(argv=None):
                 if args.command in ACTIVATION_COMMANDS:
                     preflight_activation(w, engine, args.command, payload)
                     try:
-                        sample = watcher_ready(runtime, args.command, payload)
+                        sample = watcher_ready(runtime, args.command, payload, args.usage_input)
                         result = engine.execute(args.command, payload)
                         result['watcher'] = watcher_summary(sample)
                     except BaseException:
                         watcher_stop_verified(runtime)
                         raise
                 else:
+                    if args.usage_input:
+                        watcher_command(runtime, 'ingest', '--usage-input', args.usage_input)
                     if active_state(engine):
                         sample = renew_for_work(runtime, args.command)
                     else:

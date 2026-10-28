@@ -132,6 +132,8 @@ class CandidateCoexistenceTests(unittest.TestCase):
         control = monitor.default_control(run)
         monitor.write(base/'control.json',control)
         windows = {key:dict(windowDurationMins=key,usedPercent=10,resetsAt=9999999999) for key in (300,10080)}
+        monitor.publish_usage(base, control, {'source': monitor.USAGE_SOURCE, 'sourceId': 'fixture-native',
+            'observedAt': time.time(), 'result': {'rateLimits': {'primary': windows[300], 'secondary': windows[10080]}}})
         monitor.write(base/'latest.json',monitor.sample(control=control,measurer=lambda:windows,
                                                         schedule=workflow.usage_schedule))
         now = time.time()
@@ -366,6 +368,8 @@ class CandidateCoexistenceTests(unittest.TestCase):
         control = monitor.default_control('candidate-run')
         monitor.write(base/'control.json',control)
         windows = {key:dict(windowDurationMins=key,usedPercent=10,resetsAt=9999999999) for key in (300,10080)}
+        monitor.publish_usage(base, control, {'source': monitor.USAGE_SOURCE, 'sourceId': 'fixture-native',
+            'observedAt': time.time(), 'result': {'rateLimits': {'primary': windows[300], 'secondary': windows[10080]}}})
         previous = monitor.sample(control=control,measurer=lambda:windows,schedule=workflow.usage_schedule)
         monitor.write(base/'latest.json',previous)
         # A fresh synthetic sample delays measurement; the real spawned worker never calls codex.
@@ -398,6 +402,10 @@ class CandidateCoexistenceTests(unittest.TestCase):
                 helper=self.package/'scripts/workflow.py'
                 changed_helper=(helper,helper.read_bytes())
                 helper.write_bytes(changed_helper[1]+b'\n# corruption after worker spawn\n')
+                # Integrity is checked at a measurement boundary, not on each heartbeat.
+                monitor.publish_usage(base, control, {'source': monitor.USAGE_SOURCE,
+                    'sourceId': 'trigger-integrity-check', 'observedAt': time.time(),
+                    'result': {'rateLimits': {'primary': windows[300], 'secondary': windows[10080]}}})
                 deadline=time.monotonic()+5
                 while time.monotonic()<deadline and monitor.marker_state(base)['liveIdentity']:
                     time.sleep(.05)

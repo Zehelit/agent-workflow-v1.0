@@ -397,7 +397,7 @@ class MonitorTests(unittest.TestCase):
         driver = self._file('worker.py', 'import importlib.util,sys\n'
                 f's=importlib.util.spec_from_file_location("m",{str(self.monitor_path)!r});m=importlib.util.module_from_spec(s);s.loader.exec_module(m)\n'
                 f'm.workflow_schedule=__import__("functools").partial(m.workflow_schedule,helper=__import__("pathlib").Path({str(self.root / "skills/agent-workflow-v1-0/scripts/workflow.py")!r}),helper_sha256={WORKFLOW_PIN!r})\n'
-                f'm.measure=lambda: {windows()!r}\n'
+                f'm.measure=lambda *args, **kwargs: {windows()!r}\n'
                 'sys.exit(m.main(["run","--state-dir",sys.argv[1]]))\n')
         owned = self.m.OwnedProcess([sys.executable, str(driver), str(self.base)], stdout=subprocess.PIPE,
                                    stderr=subprocess.PIPE, text=True, encoding='utf-8')
@@ -434,7 +434,7 @@ class MonitorTests(unittest.TestCase):
         driver = self._file('start-driver.py', 'import importlib.util,sys\n'
                 f's=importlib.util.spec_from_file_location("m",{str(self.monitor_path)!r});m=importlib.util.module_from_spec(s);s.loader.exec_module(m)\n'
                 f'm.workflow_schedule=__import__("functools").partial(m.workflow_schedule,helper=__import__("pathlib").Path({str(self.root / "skills/agent-workflow-v1-0/scripts/workflow.py")!r}),helper_sha256={WORKFLOW_PIN!r})\n'
-                f'm.measure=lambda: {windows()!r}\n'
+                f'm.measure=lambda *args, **kwargs: {windows()!r}\n'
                 'sys.exit(m.main(sys.argv[1:]))\n')
         real_owner = self.m.OwnedProcess
         owners = []
@@ -445,7 +445,7 @@ class MonitorTests(unittest.TestCase):
             owners.append(owner)
             return owner
         try:
-            with patch.object(self.m, 'OwnedProcess', factory):
+            with patch.object(self.m, 'OwnedProcess', factory), patch.object(self.m, 'measure', return_value=windows()):
                 code, result = self.cli('start')
             self.assertEqual(code, 0, result)
             self.assertTrue(result['health']['liveIdentity'])
@@ -484,7 +484,7 @@ class MonitorTests(unittest.TestCase):
             owners.append(owner)
             return owner
         try:
-            with patch.object(self.m, 'OwnedProcess', factory):
+            with patch.object(self.m, 'OwnedProcess', factory), patch.object(self.m, 'measure', return_value=windows()):
                 code, result = self.cli('start')
             self.assertEqual(code, 2, result)
             trace = (self.base/'worker-stderr.log').read_text(encoding='utf-8')
@@ -506,7 +506,7 @@ class MonitorTests(unittest.TestCase):
             owner = real_owner([sys.executable, '-c', 'import time; time.sleep(30)'], **kwargs)
             owners.append(owner)
             return owner
-        with patch.object(self.m, 'OwnedProcess', factory):
+        with patch.object(self.m, 'OwnedProcess', factory), patch.object(self.m, 'measure', return_value=windows()):
             code, result = self.cli('start')
         self.assertEqual(code, 2)
         self.assertEqual(result['action'], 'HOLD')
@@ -592,59 +592,20 @@ class MonitorTests(unittest.TestCase):
                 self.assertEqual(self.m.read(self.base / 'health.json')['exitReason'], expected)
                 self.assertFalse((self.base / 'running.json').exists())
 
-    def rpc_fixture(self, behavior):
-        script = self._file('rpc.py', 'import json,sys,time\n'
-            'for line in sys.stdin:\n'
-            ' value=json.loads(line)\n'
-            ' if "id" not in value: continue\n'
-            ' if value["id"]==1: result={"label":"Türkçe ı"}\n'
-            f' else: {behavior}\n'
-            ' print(json.dumps({"id":value["id"],"result":result},ensure_ascii=False),flush=True)\n')
-        return script
-
-    def test_utf8_jsonrpc_and_approved_measurement_fields(self):
-        rate = {'rateLimits': {'accountId': 'raw-secret', 'primary': windows()[300], 'secondary': windows()[10080]}}
-        script = self.rpc_fixture('result=' + repr(rate))
-        real_owner = self.m.OwnedProcess
-        created = []
-        def factory(argv, **kwargs):
-            self.assertEqual(kwargs['encoding'], 'utf-8')
-            self.assertEqual(kwargs['errors'], 'strict')
-            proc = real_owner([sys.executable, '-X', 'utf8', str(script)], **kwargs)
-            created.append(proc)
-            return proc
-        with patch.object(self.m.shutil, 'which', return_value='synthetic-codex'), patch.object(self.m, 'OwnedProcess', factory):
-            result = self.m.measure()
+    def test_native_measurement_keeps_approved_fields_without_child(self):
+        receipt = {'source': self.m.USAGE_SOURCE, 'sourceId': 'engine-native', 'observedAt': self.now,
+                   'result': {'rateLimits': {'primary': windows()[300], 'secondary': windows()[10080]},
+                              'accountId': 'private-secret'}}
+        self.m.publish_usage(self.base, self.control, receipt, self.now)
+        with patch.object(self.m, 'OwnedProcess', side_effect=AssertionError('no Codex child')):
+            result = self.m.measure(self.base, self.control, self.now)
         self.assertEqual(result, windows())
-        self.assertNotIn('raw-secret', json.dumps(result))
-        self.assertIsNotNone(created[0].proc.poll())
+        self.assertNotIn('private-secret', (self.base / 'usage-source.json').read_text())
 
-    def test_rpc_timeout_cleans_owned_cli_and_descendant(self):
-        pid_file = self.base / 'descendant-pid.json'
-        script = self._file('timeout.py', 'import subprocess,sys,json,time\n'
-             'time.sleep(.2)\n'
-             'child=subprocess.Popen([sys.executable,"-c","import time; time.sleep(60)"])\n'
-             f'open({str(pid_file)!r},"w").write(json.dumps(child.pid))\n'
-             'time.sleep(60)\n')
-        real_owner = self.m.OwnedProcess
-        created = []
-        def factory(argv, **kwargs):
-            proc = real_owner([sys.executable, str(script)], **kwargs)
-            created.append(proc)
-            return proc
-        with patch.object(self.m.shutil, 'which', return_value='synthetic-codex'), patch.object(self.m, 'OwnedProcess', factory), \
-                patch.object(self.m, 'RPC_TIMEOUT', 0.6):
-            with self.assertRaises((TimeoutError, self.m.queue.Empty)):
-                self.m.measure()
-        self.assertIsNotNone(created[0].proc.poll())
-        self.assertTrue(pid_file.exists())
-        pid = json.loads(pid_file.read_text())
-        deadline = time.monotonic() + 3
-        while time.monotonic() < deadline and self.m.identity(pid)['state'] != 'absent':
-            time.sleep(0.05)
-        self.assertEqual(self.m.identity(pid)['state'], 'absent')
-        print('A11_RPC_CLEANUP=' + json.dumps({'launcherExit': created[0].proc.returncode,
-              'descendantPid': pid, 'descendantState': 'absent'}), flush=True)
+    def test_missing_native_receipt_never_starts_cli(self):
+        with patch.object(self.m, 'OwnedProcess', side_effect=AssertionError('no Codex child')):
+            with self.assertRaises(self.m.MonitorError):
+                self.m.measure(self.base, self.control, self.now)
 
 
 if __name__ == '__main__':

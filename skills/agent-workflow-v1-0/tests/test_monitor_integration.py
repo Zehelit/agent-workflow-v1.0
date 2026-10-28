@@ -1,4 +1,4 @@
-"""N04 accepted current-core/A11 integration using owned synthetic state/RPCs."""
+"""N04 accepted current-core/A11 integration using owned synthetic state/native receipts."""
 import contextlib
 import copy
 import hashlib
@@ -84,101 +84,57 @@ class MonitorIntegrationTests(unittest.TestCase):
         self.assertEqual(result['action'], 'CONTINUE')
         self.assertEqual(set(result['windows']), {'300'})
 
-    def wire_sample(self, frame, initialize=False):
-        script = self.base / 'rpc.py'
-        script.write_text('import json,sys\nfor line in sys.stdin:\n'
-            ' value=json.loads(line)\n if "id" not in value:continue\n'
-            f' if value["id"]=={1 if initialize else 2}:print({frame!r},flush=True)\n'
-            ' else:print(json.dumps({"id":value["id"],"result":{}}),flush=True)\n', encoding='utf-8')
-        owner_type = self.m.OwnedProcess
-        owners = []
-        def factory(argv, **kwargs):
-            owned = owner_type([sys.executable, '-X', 'utf8', str(script)], **kwargs)
-            owners.append(owned)
-            return owned
-        try:
-            with patch.object(self.m.shutil, 'which', return_value='synthetic-codex'), \
-                    patch.object(self.m, 'OwnedProcess', factory):
-                result = self.m.sample(None, self.control, self.m.measure, self.now, self.schedule)
-            self.assertTrue(all(owner.proc.poll() is not None for owner in owners))
-            return result, len(owners)
-        finally:
-            for owner in owners:
-                owner.close()
+    def receipt_sample(self, text):
+        attempts = []
+        def read_receipt():
+            attempts.append(True)
+            value = self.m.strict_json(text)
+            self.m.publish_usage(self.base, self.control, value, self.now)
+            return self.m.measure(self.base, self.control, self.now)
+        with patch.object(self.m.subprocess, 'Popen', side_effect=AssertionError('no Codex process')):
+            result = self.m.sample(None, self.control, read_receipt, self.now, self.schedule)
+        return result, len(attempts)
 
-    def test_actual_wire_duplicate_retries_and_latches_save(self):
-        wire = ('{"id":2,"result":{"rateLimits":{"primary":{"windowDurationMins":300,'
-                '"usedPercent":95,"usedPercent":20,"resetsAt":9999999999},'
-                '"secondary":{"windowDurationMins":10080,"usedPercent":20,"resetsAt":9999999999}}}}')
-        result, count = self.wire_sample(wire)
-        self.assertEqual(count, 2)
-        self.assertEqual(result['measurementAttempts'], 2)
-        self.assertEqual(result['action'], 'SAVE_AND_STOP')
+    def native_receipt(self):
+        return {'source': self.m.USAGE_SOURCE, 'sourceId': 'native-fixture', 'observedAt': self.now,
+                'result': {'rateLimits': {'primary': self.windows()[300], 'secondary': self.windows()[10080]}}}
+
+    def test_duplicate_native_input_retries_and_latches_save(self):
+        wire = json.dumps(self.native_receipt()).replace('"usedPercent": 20', '"usedPercent": 95, "usedPercent": 20', 1)
+        result, count = self.receipt_sample(wire)
+        self.assertEqual((count, result['measurementAttempts'], result['action']), (2, 2, 'SAVE_AND_STOP'))
         self.assertEqual(result['exitReason'], 'measurement_failure')
-        self.assertEqual(result['errorType'], 'MonitorError')
-        self.assertNotIn('windows', result)
         self.m.latch(self.base, result, self.control)
-        with patch.object(self.m, 'measure', side_effect=RuntimeError('must not resample')) as call:
-            for command in ('once', 'start', 'status', 'renew'):
-                code, actual = self.cli(command)
-                self.assertEqual(code, 0)
-                self.assertEqual(actual['action'], 'SAVE_AND_STOP')
-            call.assert_not_called()
-        print('A11_DUPLICATE_RPC=' + json.dumps({'attempts': count, 'action': result['action'],
-              'latched': True, 'allOwnedTerminal': True}), flush=True)
-
-    def test_strict_json_every_frame_and_nested_boundary(self):
-        frames = [('{"id":1,"id":2,"result":{}}', True),
-                  ('{"id":1,"result":{"meta":{"x":1,"x":2}}}', True),
-                  ('{"method":"notice","params":{"x":1,"x":2}}', False),
-                  ('{"id":2,"result":{"ignored":[{"x":NaN}]}}', False),
-                  ('{"id":2,"result":{"ignored":{"x":Infinity}}}', False),
-                  ('{"id":2,"result":{"ignored":{"x":-Infinity}}}', False),
-                  ('{"id":2,"result":{"ignored":{"x":1e9999}}}', False),
-                  ('[]', False), ('null', False), ('42', False)]
-        for frame, initialize in frames:
-            with self.subTest(frame=frame):
-                result, count = self.wire_sample(frame, initialize)
-                self.assertEqual((result['action'], result['measurementAttempts'], count),
-                                 ('SAVE_AND_STOP', 2, 2))
-                self.assertEqual(result['errorType'], 'MonitorError')
-
-    def test_valid_rpc_retains_only_approved_fields(self):
-        frame = json.dumps({'id': 2, 'result': {'rateLimitsByLimitId': {'codex': {
-            'primary': dict(self.windows()[300], accountId='private-secret'),
-            'secondary': self.windows()[10080]}}, 'credential': 'private-secret'}})
-        result, count = self.wire_sample(frame)
-        self.assertEqual((result['action'], count), ('CONTINUE', 1))
-        self.assertEqual(set(result['windows']), {'300', '10080'})
-        self.assertNotIn('private-secret', json.dumps(result))
-
-    def test_huge_integer_every_rpc_position_retries_and_latches(self):
-        huge = 10 ** 400
-        good = {'id': 2, 'result': {'rateLimits': {'primary': self.windows()[300],
-                                                'secondary': self.windows()[10080]}}}
-        usage = copy.deepcopy(good)
-        usage['result']['rateLimits']['primary']['usedPercent'] = huge
-        reset = copy.deepcopy(good)
-        reset['result']['rateLimits']['secondary']['resetsAt'] = huge
-        ignored = copy.deepcopy(good)
-        ignored['result']['ignored'] = [{'nested': {'number': huge}}]
-        frames = [(usage, False), (reset, False), (ignored, False),
-                  ({'id': 1, 'result': {'ignored': [huge]}}, True),
-                  ({'method': 'notice', 'params': {'ignored': [huge]}}, False),
-                  ({'id': huge, 'result': {}}, False)]
-        for wire, initialize in frames:
-            with self.subTest(wire=repr(wire)):
-                result, count = self.wire_sample(json.dumps(wire), initialize)
-                self.assertEqual((result['action'], result['measurementAttempts'], count),
-                                 ('SAVE_AND_STOP', 2, 2))
-                self.assertEqual(result['errorType'], 'MonitorError')
-                self.assertNotIn('windows', result)
-        self.m.latch(self.base, result, self.control)
-        with patch.object(self.m, 'measure', side_effect=RuntimeError('must not resample')) as call:
+        with patch.object(self.m, 'measure', side_effect=AssertionError('must not resample')) as call:
             for command in ('once', 'start', 'status', 'renew'):
                 code, actual = self.cli(command)
                 self.assertEqual((code, actual['action']), (0, 'SAVE_AND_STOP'))
             call.assert_not_called()
+
+    def test_strict_native_json_and_nested_boundaries(self):
+        frames = ['{"x":1,"x":2}', '{"ignored":{"x":NaN}}', '{"ignored":{"x":Infinity}}',
+                  '{"ignored":{"x":-Infinity}}', '{"ignored":{"x":1e9999}}', '[]', 'null', '42']
+        for frame in frames:
+            with self.subTest(frame=frame):
+                result, count = self.receipt_sample(frame)
+                self.assertEqual((result['action'], result['measurementAttempts'], count), ('SAVE_AND_STOP', 2, 2))
+
+    def test_native_tool_result_retains_only_approved_fields(self):
+        value = self.native_receipt()
+        value['result']['accountId'] = 'private-secret'
+        value['result']['rateLimits']['primary']['accountId'] = 'private-secret'
+        result, count = self.receipt_sample(json.dumps(value))
+        self.assertEqual((result['action'], count), ('CONTINUE', 1))
+        self.assertNotIn('private-secret', json.dumps(result))
+        self.assertNotIn('private-secret', (self.base / 'usage-source.json').read_text())
+
+    def test_huge_integer_native_inputs_never_become_measurements(self):
+        for field in ('usedPercent', 'resetsAt'):
+            value = self.native_receipt()
+            value['result']['rateLimits']['primary'][field] = 10 ** 400
+            result, count = self.receipt_sample(json.dumps(value))
+            self.assertEqual((result['action'], count), ('SAVE_AND_STOP', 2))
+            self.assertNotIn('windows', result)
 
     def test_malformed_health_holds_with_and_without_marker(self):
         actual = self.m.identity(os.getpid())

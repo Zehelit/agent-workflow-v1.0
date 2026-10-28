@@ -174,6 +174,8 @@ class GoalBindingTests(unittest.TestCase):
                 monitor.write(watcher / 'control.json', control)
                 windows = {key: dict(windowDurationMins=key, usedPercent=10, resetsAt=9999999999)
                     for key in (300, 10080)}
+                monitor.publish_usage(watcher, control, {'source': monitor.USAGE_SOURCE, 'sourceId': 'fixture-native',
+                    'observedAt': time.time(), 'result': {'rateLimits': {'primary': windows[300], 'secondary': windows[10080]}}})
                 monitor.write(watcher / 'latest.json', monitor.sample(control=control,
                     measurer=lambda: windows, schedule=m.usage_schedule))
                 result = subprocess.run([*python, str(entry), '--manifest', str(package / 'manifest.json'),

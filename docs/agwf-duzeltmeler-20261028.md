@@ -11,3 +11,5 @@ Doğrulama: 63 paket/araç testi ve dokuz Windows dosya erişimi testi geçti. D
 Bu bakım AGWF etkinleştirilmeden yapıldı. Yerel yapılandırmadaki yedi skill kapalı kaldı; iş akışı komutu, ajan veya izleyici başlatılmadı. Geçici test dosyalarında çekirdek dosya erişimi işlevleri çağrıldı. Canlı Remote uyumluluğu bu testlerin kapsamı değildir.
 
 Her limit ölçümünde ayrı Codex sunucusu başlatma, PATH'ten CLI seçme, alt sunucunun hata çıktısını atma ve tekrarlı paket doğrulaması eski sürümden gelen tasarım riskleridir. Bu bakım bunları yeniden tasarlamaz ve Remote hatasının kesin nedeninin giderildiği iddiasında bulunmaz. AGWF'yi yeniden etkinleştirmek ayrı kullanıcı kararıdır.
+
+Sonraki tamamlayıcı bakımda bu açık maddeler de ele alındı: [tüm düzeltmelerin sonucu](agwf-tum-duzeltmeler-20261028.md). Yukarıdaki paragraf ilk bakımın kapsamını kaydeder; güncel izleyici artık ek Codex sunucusu başlatmaz.

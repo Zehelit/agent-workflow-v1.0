@@ -14,7 +14,7 @@
     }
   },
   "policy": {
-    "stop_remaining_percent": 10,
+    "stop_remaining_percent": 20,
     "usage_max_age_seconds": 300,
     "monitored_window_minutes": [
       300,

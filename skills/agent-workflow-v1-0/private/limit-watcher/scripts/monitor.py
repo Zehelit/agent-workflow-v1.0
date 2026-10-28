@@ -6,9 +6,7 @@ import json
 import math
 import os
 from pathlib import Path
-import queue
 import signal
-import shutil
 import subprocess
 import sys
 import threading
@@ -20,7 +18,15 @@ LEASE_SECONDS = 600
 HEARTBEAT_SECONDS = 1
 HEARTBEAT_MAX_AGE = 5
 HISTORY_LIMIT = 20
-RPC_TIMEOUT = 20
+USAGE_MAX_AGE = 300
+USAGE_SOURCE = 'mcp__codex_app__get_usage_limits'
+DIAGNOSTIC_CODES = {'monitor_validation', 'usage_receipt_expired', 'usage_receipt_invalid',
+                    'usage_source_invalid', 'usage_bucket_missing', 'usage_windows_missing',
+                    'usage_receipt_replay', 'usage_receipt_missing', 'usage_receipt_identity',
+                    'usage_source_read_failed'}
+DIAGNOSTIC_ERRORS = {'MonitorError', 'OSError', 'ValueError', 'RuntimeError', 'KeyError',
+                     'TimeoutError', 'TypeError', 'FileNotFoundError', 'PermissionError',
+                     'UnicodeDecodeError'}
 SCHEMA_VERSION = 1
 MAX_FINITE_INTEGER = int(sys.float_info.max)
 MAX_PID = 0xffffffff if os.name == 'nt' else 0x7fffffff
@@ -34,12 +40,14 @@ _runtime = None
 
 
 class MonitorError(RuntimeError):
-    pass
+    def __init__(self, message, code='monitor_validation'):
+        super().__init__(message)
+        self.code = code
 
 
-def require(condition, message):
+def require(condition, message, code='monitor_validation'):
     if not condition:
-        raise MonitorError(message)
+        raise MonitorError(message, code)
 
 
 def number(value):
@@ -201,7 +209,7 @@ def validate_windows(windows):
 
 
 class OwnedProcess:
-    """Keep an OS ownership boundary for CLI descendants, without PID-based killing."""
+    """Keep an OS ownership boundary for the Python worker and its descendants."""
     def __init__(self, argv, **kwargs):
         self.job = None
         self.api = None
@@ -306,70 +314,96 @@ class OwnedProcess:
             self.proc.wait(timeout=5)
 
 
-def measure():
-    exe = shutil.which('codex')
-    require(exe is not None, 'codex CLI unavailable')
-    owned = OwnedProcess([exe, 'app-server', '--stdio'], stdin=subprocess.PIPE,
-                            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True,
-                            encoding='utf-8', errors='strict')
-    proc = owned.proc
-    messages = queue.Queue()
-    def receive():
-        try:
-            for line in proc.stdout:
-                try:
-                    value = strict_json(line)
-                    require(type(value) is dict, 'invalid RPC frame')
-                    messages.put(value)
-                except (ValueError, MonitorError) as error:
-                    # Only our fixed validation messages are safe to forward.
-                    messages.put({'readerFailed': str(error) if isinstance(error, MonitorError)
-                                  else 'invalid RPC JSON'})
-                    break
-        except (OSError, UnicodeError):
-            messages.put({'readerFailed': True})
-        finally:
-            messages.put({'readerClosed': True})
-    reader = threading.Thread(target=receive, daemon=True)
-    reader.start()
-    def request(msg):
-        proc.stdin.write(json.dumps(msg, ensure_ascii=False) + '\n')
-        proc.stdin.flush()
-        deadline = time.monotonic() + RPC_TIMEOUT
-        while True:
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                raise TimeoutError('usage RPC timeout')
-            value = messages.get(timeout=remaining)
-            if value.get('readerFailed'):
-                raise MonitorError(value['readerFailed'])
-            require(not value.get('readerClosed'), 'usage RPC reader closed')
-            if value.get('id') == msg['id']:
-                require('error' not in value and type(value.get('result')) is dict, 'usage RPC failed')
-                return value['result']
-    try:
-        request({'id': 1, 'method': 'initialize', 'params': {'clientInfo': {'name': 'limit_sampler', 'version': '2.0'}}})
-        proc.stdin.write('{"method":"initialized","params":{}}\n')
-        proc.stdin.flush()
-        result = request({'id': 2, 'method': 'account/rateLimits/read'})
-        buckets = result.get('rateLimitsByLimitId') or {}
-        require(type(buckets) is dict, 'invalid usage buckets')
-        rate = buckets.get('codex') or result.get('rateLimits') or {}
-        require(type(rate) is dict, 'missing rate limits')
-        windows = {}
-        for window in (rate.get('primary'), rate.get('secondary')):
-            if isinstance(window, dict):
-                duration = window.get('windowDurationMins')
-                require(type(duration) is int, 'invalid duration')
-                require(duration not in windows, 'duplicate duration')
-                windows[duration] = window
-        return validate_windows(windows)
-    finally:
-        # Own only this child; terminate even on decoder, request, or validation failure.
-        owned.close()
-        proc.stdin.close()
-        reader.join(timeout=1)
-        proc.stdout.close()
+class UsageReading(dict):
+    def __init__(self, windows, observed_at):
+        super().__init__(windows)
+        self.observed_at = observed_at
+
+
+def validate_usage_time(observed_at, now):
+    require(number(observed_at) and 0 <= now - observed_at <= USAGE_MAX_AGE,
+            'native usage receipt is missing, future or stale', 'usage_receipt_expired')
+
+
+def publish_usage(base, control, document, now=None):
+    """Publish only approved fields from a coordinator-supplied native tool receipt."""
+    now = time.time() if now is None else now
+    validate_control(control)
+    require(type(document) is dict and set(document) == {'source', 'sourceId', 'observedAt', 'result'},
+            'invalid native receipt fields', 'usage_receipt_invalid')
+    require(document['source'] == USAGE_SOURCE, 'native Codex usage tool required', 'usage_source_invalid')
+    source_id = document['sourceId']
+    require(type(source_id) is str and 0 < len(source_id.strip()) <= 200,
+            'native tool receipt ID required', 'usage_receipt_invalid')
+    validate_usage_time(document['observedAt'], now)
+    require(document['observedAt'] > control.get('usageAfter', -1),
+            'native usage must follow the stop observation', 'usage_receipt_replay')
+    result = document['result']
+    require(type(result) is dict, 'native usage result required', 'usage_receipt_invalid')
+    buckets = result.get('rateLimitsByLimitId')
+    if buckets is not None:
+        require(type(buckets) is dict and type(buckets.get('codex')) is dict,
+                'Codex usage bucket missing', 'usage_bucket_missing')
+        rate = buckets['codex']
+    else:
+        rate = result.get('rateLimits')
+    require(type(rate) is dict and rate.get('limitId', 'codex') == 'codex',
+            'Codex usage bucket required', 'usage_bucket_missing')
+    windows = {}
+    for key in ('primary', 'secondary'):
+        window = rate.get(key)
+        require(type(window) is dict, 'both usage windows required', 'usage_windows_missing')
+        duration = window.get('windowDurationMins')
+        require(type(duration) is int and duration not in windows, 'invalid usage duration', 'usage_receipt_invalid')
+        windows[duration] = window
+    windows = validate_windows(windows)
+    value = {'schemaVersion': SCHEMA_VERSION, 'runId': control['runId'], 'epoch': control['epoch'],
+             'source': USAGE_SOURCE, 'sourceId': source_id, 'observedAt': document['observedAt'],
+             'windows': {str(key): window for key, window in windows.items()}}
+    path = base / 'usage-source.json'
+    if path.exists():
+        previous = read(path)
+        require(type(previous) is dict and previous.get('runId') == control['runId'],
+                'stored usage source belongs to another run or is invalid', 'usage_receipt_identity')
+        if previous.get('runId') == control['runId']:
+            if previous == value:
+                return value
+            require(previous.get('sourceId') != source_id and number(previous.get('observedAt')) and
+                    value['observedAt'] > previous['observedAt'],
+                    'native usage replay or rollback refused', 'usage_receipt_replay')
+    write(path, value)
+    return value
+
+
+def ingest_usage_input(base, control, input_path, now=None):
+    path = Path(input_path)
+    require(path.is_file() and path.stat().st_size <= 1024 * 1024,
+            'bounded native usage input required', 'usage_receipt_invalid')
+    return publish_usage(base, control, read(path), now)
+
+
+def measure(base=None, control=None, now=None):
+    """Read an existing native receipt. Never launch or connect a Codex process."""
+    require(base is not None and control is not None, 'native usage source required', 'usage_receipt_missing')
+    now = time.time() if now is None else now
+    path = base / 'usage-source.json'
+    require(path.is_file(), 'native usage receipt missing', 'usage_receipt_missing')
+    value = read(path)
+    require(type(value) is dict and set(value) == {'schemaVersion', 'runId', 'epoch', 'source',
+            'sourceId', 'observedAt', 'windows'} and type(value['schemaVersion']) is int and
+            value['schemaVersion'] == SCHEMA_VERSION and value['source'] == USAGE_SOURCE,
+            'invalid stored native receipt', 'usage_receipt_invalid')
+    require(value['runId'] == control['runId'] and value['epoch'] == control['epoch'],
+            'native usage run or epoch mismatch', 'usage_receipt_identity')
+    require(type(value['sourceId']) is str and 0 < len(value['sourceId'].strip()) <= 200,
+            'invalid stored receipt ID', 'usage_receipt_invalid')
+    validate_usage_time(value['observedAt'], now)
+    require(value['observedAt'] > control.get('usageAfter', -1),
+            'native usage predates stop observation', 'usage_receipt_replay')
+    require(type(value['windows']) is dict and set(value['windows']) == {'300', '10080'},
+            'stored usage windows missing', 'usage_windows_missing')
+    windows = validate_windows({int(key): window for key, window in value['windows'].items()})
+    return UsageReading(windows, value['observedAt'])
 
 
 def policy_card(control, now):
@@ -385,12 +419,14 @@ def policy_card(control, now):
 def validate_control(control):
     require(type(control) is dict and set(control) <= {
         'schemaVersion', 'active', 'expiresAt', 'runId', 'epoch', 'policyException',
-        'continuationQuote', 'continuedAt', 'nativeTransition'
+        'continuationQuote', 'continuedAt', 'nativeTransition', 'usageAfter'
     }, 'invalid control fields')
     require(control.get('schemaVersion') == SCHEMA_VERSION and type(control.get('schemaVersion')) is int,
             'invalid control schema')
     require(type(control.get('active')) is bool, 'invalid active flag')
     require(number(control.get('expiresAt')) and control['expiresAt'] >= 0, 'invalid lease')
+    if 'usageAfter' in control:
+        require(number(control['usageAfter']) and control['usageAfter'] >= 0, 'invalid usage freshness floor')
     for key in ('runId', 'epoch'):
         require(type(control.get(key)) is str and 0 < len(control[key]) <= 200, 'invalid run identity')
     exception = control.get('policyException')
@@ -455,11 +491,15 @@ def sample(previous=None, control=None, measurer=None, now=None, schedule=None):
     measurer = measurer or measure
     schedule = schedule or workflow_schedule()
     error_type = None
+    diagnostic_code = None
     for attempt in range(2):
         try:
-            windows = validate_windows(measurer())
-            at = time.time() if now is None else now
-            card = policy_card(control, at)
+            reading = measurer()
+            windows = validate_windows(dict(reading) if isinstance(reading, UsageReading) else reading)
+            current = time.time() if now is None else now
+            at = getattr(reading, 'observed_at', current)
+            validate_usage_time(at, current)
+            card = policy_card(control, current)
             chosen = {key: windows[key] for key in card['decisionWindows']}
             prior = previous
             if prior and (not number(prior.get('at')) or not 0 < at - prior['at'] <= 600):
@@ -467,6 +507,8 @@ def sample(previous=None, control=None, measurer=None, now=None, schedule=None):
             if prior and prior.get('policy', {}).get('decisionWindows') != card['decisionWindows']:
                 prior = None
             result = schedule(chosen, at, prior)
+            require(result['action'] == 'SAVE_AND_STOP' or current < result['next_check_at'],
+                    'native usage receipt passed its adaptive deadline', 'usage_receipt_expired')
             result['windows'] = {str(key): value for key, value in windows.items()}
             result['policy'] = card
             result['measurementAttempts'] = attempt + 1
@@ -474,13 +516,62 @@ def sample(previous=None, control=None, measurer=None, now=None, schedule=None):
                                     result['remaining'] > 20 else 'usage_threshold' if
                                     result['action'] == 'SAVE_AND_STOP' else None)
             result['errorType'] = None
+            result['diagnosticCode'] = None
             return result
-        except (OSError, ValueError, RuntimeError, KeyError, queue.Empty, TimeoutError, TypeError) as error:
-            error_type = type(error).__name__
+        except (OSError, ValueError, RuntimeError, KeyError, TimeoutError, TypeError) as error:
+            name = type(error).__name__
+            error_type = name if name in DIAGNOSTIC_ERRORS else 'RuntimeError'
+            code = error.code if isinstance(error, MonitorError) else None
+            diagnostic_code = code if type(code) is str and code in DIAGNOSTIC_CODES else 'usage_source_read_failed'
     at = time.time() if now is None else now
     return {'at': at, 'action': 'SAVE_AND_STOP', 'reason': 'usage unavailable after retry',
             'exitReason': 'measurement_failure', 'errorType': error_type, 'measurementAttempts': 2,
+            'diagnosticCode': diagnostic_code,
             'policy': policy_card(control, at)}
+
+
+def measurement_cycle(base, control, previous, schedule, now=None):
+    """One integrity check and one bounded receipt read, independent of heartbeat."""
+    if _runtime is not None:
+        _runtime.check_binding()
+    result = sample(previous, control, lambda: measure(base, control, now), now, schedule)
+    latch(base, result, control)
+    write(base / 'latest.json', result)
+    if result.get('errorType'):
+        path = base / 'diagnostics.json'
+        try:
+            old = read(path) if path.exists() else {}
+            events = old.get('events', []) if type(old) is dict else []
+        except (OSError, ValueError, RuntimeError):
+            events = []
+        events = events if type(events) is list else []
+        # Allowlisted codes and classes only: never persist exception text or tool bodies.
+        events = [value for value in events if type(value) is dict and set(value) == {
+            'at', 'stage', 'code', 'errorType', 'attempts'} and number(value['at']) and
+            value['stage'] == 'native_usage_read' and type(value['code']) is str and
+            value['code'] in DIAGNOSTIC_CODES and type(value['errorType']) is str and
+            value['errorType'] in DIAGNOSTIC_ERRORS and type(value['attempts']) is int and
+            value['attempts'] in (1, 2)][-19:]
+        events.append({'at': result['at'], 'stage': 'native_usage_read',
+                       'code': result['diagnosticCode'], 'errorType': result['errorType'],
+                       'attempts': result['measurementAttempts']})
+        write(path, {'schemaVersion': SCHEMA_VERSION, 'events': events})
+    return result
+
+
+def heartbeat_once(base, worker):
+    current = load_control(base)
+    require(current['runId'] == worker['runId'] and current['epoch'] == worker['epoch'],
+            'heartbeat ownership changed')
+    event(base, worker, 'running', control=current)
+
+
+def usage_token(base):
+    try:
+        stat = (base / 'usage-source.json').stat()
+        return stat.st_mtime_ns, stat.st_size
+    except FileNotFoundError:
+        return None
 
 
 def latch(base, result, control):
@@ -669,28 +760,23 @@ def run(base, expected_epoch=None, worker_token=None):
     def heartbeat():
         while not stopped.wait(HEARTBEAT_SECONDS):
             try:
-                if _runtime is not None:
-                    _runtime.check_binding()
-                current = load_control(base)
-                event(base, worker, 'running', control=current)
+                heartbeat_once(base, worker)
             except (OSError, ValueError, RuntimeError):
                 # Main loop owns terminal reporting; a missed heartbeat is unhealthy.
                 break
     pulse = threading.Thread(target=heartbeat, daemon=True)
-    next_binding_check = 0
     try:
+        schedule = workflow_schedule()
         event(base, worker, 'running', control=control)
         pulse.start()
         previous = read(base / 'latest.json') if (base / 'latest.json').exists() else None
         if previous and previous.get('policy', {}).get('epoch') != control['epoch']:
             previous = None
         due = previous.get('next_check_at', 0) if previous and number(previous.get('at')) and 0 <= time.time() - previous['at'] <= 300 else 0
+        last_source = usage_token(base)
         while True:
-            if _runtime is not None and time.monotonic() >= next_binding_check:
-                _runtime.check_binding()
-                next_binding_check = time.monotonic() + 1
             control = load_control(base)
-            require(control['epoch'] == worker['epoch'], 'worker epoch changed')
+            require(control['epoch'] == worker['epoch'] and control['runId'] == worker['runId'], 'worker ownership changed')
             if not control['active']:
                 terminal = 'explicit_stop'
                 break
@@ -704,11 +790,10 @@ def run(base, expected_epoch=None, worker_token=None):
                 break
             if previous and previous.get('policy', {}).get('decisionWindows') != policy_card(control, time.time())['decisionWindows']:
                 due = 0
-            if time.time() >= due:
-                previous = sample(previous, control)
-                # A SAVE obtained during stop/expiry is still retained. Never relax it.
-                latch(base, previous, control)
-                write(base / 'latest.json', previous)
+            source = usage_token(base)
+            if time.time() >= due or source != last_source:
+                previous = measurement_cycle(base, control, previous, schedule)
+                last_source = source
                 if previous['action'] == 'SAVE_AND_STOP':
                     terminal, error_type = previous['exitReason'], previous['errorType']
                     break
@@ -753,6 +838,8 @@ def configure(base, args, now):
         continued = args.native_transition_at if native else now
         require(not saved or continued > saved.get('at', 0), 'continuation must follow SAVE')
         control = default_control(args.run_id, now)
+        if saved:
+            control['usageAfter'] = saved['at']
         if native:
             control['nativeTransition'] = {'updatedAt': args.native_transition_at,
                                            'sourceId': args.native_receipt}
@@ -792,7 +879,7 @@ def main(argv=None, runtime=None):
     if runtime is not None:
         runtime.check_binding()
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('command', choices=['start', 'renew', 'stop', 'status', 'once', 'run'])
+    parser.add_argument('command', choices=['start', 'renew', 'stop', 'status', 'once', 'run', 'ingest'])
     parser.add_argument('--state-dir', required=True)
     parser.add_argument('--run-id')
     parser.add_argument('--new-epoch', action='store_true')
@@ -802,16 +889,35 @@ def main(argv=None, runtime=None):
     parser.add_argument('--ignore-weekly-quote')
     parser.add_argument('--exception-expires-at', type=float)
     parser.add_argument('--clear-exception', action='store_true')
+    parser.add_argument('--usage-input', help='Native get_usage_limits receipt; does not invoke Codex')
     parser.add_argument('--worker-epoch', help=argparse.SUPPRESS)
     parser.add_argument('--worker-token', help=argparse.SUPPRESS)
     args = parser.parse_args(argv)
-    if runtime is not None and args.command in ('start', 'renew', 'once'):
+    if runtime is not None and args.command in ('start', 'renew', 'once', 'ingest'):
         require(args.run_id is None, 'candidate owns run ID')
         args.run_id = runtime.args.run_id
     base = Path(args.state_dir).resolve()
     base.mkdir(parents=True, exist_ok=True)
     try:
         require(args.command == 'run' or not (args.worker_epoch or args.worker_token), 'worker flags require run')
+        require(args.command not in ('status', 'stop', 'run') or not args.usage_input,
+                'usage input unsupported for command')
+        if args.command == 'ingest':
+            require(args.usage_input and not (args.new_epoch or args.continuation_quote or
+                    args.native_transition_at is not None or args.native_receipt or
+                    args.ignore_weekly_quote or args.exception_expires_at or args.clear_exception),
+                    'ingest requires only a native usage input')
+            control = load_control(base) if (base / 'control.json').exists() else default_control(args.run_id)
+            require(not args.run_id or args.run_id == control['runId'], 'usage input run mismatch')
+            saved = latched_result(base, control)
+            require(not saved, 'SAVE remains latched; resume requires fresh authorization')
+            value = ingest_usage_input(base, control, args.usage_input)
+            if not (base / 'control.json').exists():
+                control.update(active=False, expiresAt=0)
+                write(base / 'control.json', control)
+            print(json.dumps({'published': True, 'source': USAGE_SOURCE, 'observedAt': value['observedAt'],
+                              'activated': False, 'runId': control['runId'], 'epoch': control['epoch']}))
+            return 0
         if args.command in ('status', 'stop', 'run'):
             require(not (args.run_id or args.new_epoch or args.continuation_quote or args.native_transition_at is not None or
                          args.native_receipt or args.ignore_weekly_quote or
@@ -849,18 +955,25 @@ def main(argv=None, runtime=None):
                 elif args.command == 'renew':
                     require(marker_state(base)['identityState'] != 'unknown', 'worker identity unverifiable')
                 control, saved = configure(base, args, time.time())
+                if args.usage_input and not saved:
+                    ingest_usage_input(base, control, args.usage_input)
                 if saved:
                     result = saved
                 elif args.command == 'once':
                     previous = read(base / 'latest.json') if (base / 'latest.json').exists() else None
                     if previous and previous.get('policy', {}).get('epoch') != control['epoch']:
                         previous = None
-                    result = sample(previous, control)
-                    latch(base, result, control)
-                    write(base / 'latest.json', result)
+                    result = measurement_cycle(base, control, previous, workflow_schedule())
                 elif args.command == 'renew':
                     result = {'requested': 'renew', 'leaseSeconds': LEASE_SECONDS, **status(base)}
                 else:
+                    # Refuse before starting a worker if no current native receipt exists.
+                    reading = measure(base, control)
+                    preflight = sample(control=control, measurer=lambda: reading, schedule=workflow_schedule())
+                    if preflight['action'] == 'SAVE_AND_STOP':
+                        latch(base, preflight, control)
+                        write(base / 'latest.json', preflight)
+                    require(preflight['action'] != 'SAVE_AND_STOP', 'native usage preflight requested SAVE_AND_STOP')
                     worker_token = uuid.uuid4().hex
                     worker_argv = runtime.worker_prefix() + ['run'] if runtime is not None else [sys.executable, '-B', str(Path(__file__).resolve()), 'run', '--state-dir', str(base)]
                     worker_argv += ['--worker-epoch', control['epoch'], '--worker-token', worker_token]
@@ -901,10 +1014,21 @@ def main(argv=None, runtime=None):
         print(json.dumps(result, ensure_ascii=False))
         return 0
     except (OSError, ValueError, RuntimeError, KeyError, TypeError) as error:
+        if args.command == 'start' and type(locals().get('control')) is dict:
+            try:
+                if marker_state(base)['identityState'] == 'absent':
+                    current = load_control(base)
+                    if (current['runId'], current['epoch']) == (control['runId'], control['epoch']):
+                        current.update(active=False, expiresAt=0)
+                        write(base / 'control.json', current)
+            except (OSError, ValueError, RuntimeError, KeyError, TypeError):
+                pass  # Preserve the original failure; never touch an unknown/live owner.
         if args.command == 'run':
             traceback.print_exc(file=sys.stderr)
-        # Error class is diagnostic; never persist RPC payloads, credentials or arbitrary exception text.
-        print(json.dumps({'action': 'HOLD', 'errorType': type(error).__name__, 'reason': str(error)
+        # Keep operation diagnostics without recording arbitrary tool/exception bodies.
+        code = error.code if isinstance(error, MonitorError) else None
+        code = code if type(code) is str and code in DIAGNOSTIC_CODES else 'usage_source_read_failed'
+        print(json.dumps({'action': 'HOLD', 'errorType': type(error).__name__, 'diagnosticCode': code, 'reason': str(error)
                           if isinstance(error, MonitorError) else 'monitor operation failed'}))
         return 2
 
