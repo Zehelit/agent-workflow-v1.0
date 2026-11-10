@@ -296,7 +296,7 @@ class WorkflowTests(unittest.TestCase):
         self.assertTrue((unknown/'user.txt').exists())
 
     def test_default_state_namespace_leaves_old_helper_untouched(self):
-        self.assertEqual(self.engine.base, self.root / '.agent-workflow-v1-0')
+        self.assertEqual(self.engine.base, self.root / '.agent-workflow-v1-1')
         retired = self.root / '.agent-workflow'
         retired.mkdir()
         (retired / 'state.json').write_text('retired inert evidence')
@@ -316,7 +316,7 @@ class WorkflowTests(unittest.TestCase):
         for _ in range(3):
             pointer = self.snap()['checkpoint']
             owner = m.read_json(checkpoints / pointer['id'] / 'owner.json')
-            self.assertEqual(owner, {'owner': 'agent-workflow-v1-0', 'project': str(self.root)})
+            self.assertEqual(owner, {'owner': 'agent-workflow-v1-1', 'project': str(self.root)})
         self.assertTrue((foreign / 'evidence.txt').is_file())
         self.assertEqual(len([p for p in checkpoints.iterdir() if p != foreign]), 2)
 

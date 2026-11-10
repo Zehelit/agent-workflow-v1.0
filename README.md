@@ -4,7 +4,7 @@
 
 AGWF; ana ajanın görevleri bölmesine, gerektiğinde uzman alt ajanlar kullanmasına, dosya sahipliğini izlemesine, sonuçları bağımsız inceletmesine ve kullanım sınırına yaklaşırken doğrulanmış bir kurtarma kaydı hazırlamasına yardımcı olur. Kod geliştirme, araştırma, belge hazırlama ve analiz işlerinde kullanılabilir. Küçük işler ana ajanda kalabilir; her iş için bir takım kurulması gerekmez.
 
-Paket ve görünen ürün sürümü **1.1**'dir. Teknik skill kimliği ve kurulum klasörü uyumluluk için **`agent-workflow-v1-0`** olarak kalır. Depo adresindeki `v1.0` eki sürüm seçmez; kullanılan sürümü kaynak commit'i, manifest ve harici SHA-256 kaydı belirler. [Sürüm değişiklikleri](CHANGELOG.md).
+Paket sürümü **1.1**, görünen ad **agent-workflow-v1.1**, teknik skill kimliği ve kurulum klasörü **`agent-workflow-v1-1`**'dir. Skill'i **`$agent-workflow-v1-1`** ile çağırın. Yeni çalışma kayıtları **`.agent-workflow-v1-1/runs/<run-id>`** altında oluşur. Kaynak commit'i, manifest ve harici SHA-256 kaydı kullanılan paketi doğrular. [Sürüm değişiklikleri](CHANGELOG.md).
 
 ## Ne sağlar?
 
@@ -65,7 +65,7 @@ flowchart TD
     Complete --> NativeDone["Ana ajan native goal sonucunu ayrıca günceller"]
 ```
 
-İlk etkinleştirme ölçüm eskimesiyle reddedilirse candidate denemeyi kaydeder. Aynı kapsamda tekrar için hata yanıtındaki `startup_retry.attempt_sha256` haricen korunur ve `--startup-attempt-sha256` ile verilir. Yarım, değiştirilmiş veya başka duruş nedenine ait kayıt tekrar yetkisi değildir. [İşletim ve toparlanma sözleşmesi](skills/agent-workflow-v1-0/references/operations.md).
+İlk etkinleştirme ölçüm eskimesiyle reddedilirse candidate denemeyi kaydeder. Aynı kapsamda tekrar için hata yanıtındaki `startup_retry.attempt_sha256` haricen korunur ve `--startup-attempt-sha256` ile verilir. Yarım, değiştirilmiş veya başka duruş nedenine ait kayıt tekrar yetkisi değildir. [İşletim ve toparlanma sözleşmesi](skills/agent-workflow-v1-1/references/operations.md).
 
 ## Orchestration
 
@@ -111,8 +111,8 @@ Rutin izleme son satırdaki modele değil Python worker'a aittir. Alt ajan rolle
 Python **3.11+** ve standart kütüphane yeterlidir. Git kaynağı almak için gerekir. Yönetici yetkisi zorunlu değildir; kullanıcı skill klasörüne erişim gerekir. PowerShell örneği:
 
 ```powershell
-git clone https://github.com/Zehelit/agent-workflow-v1.0.git
-Set-Location agent-workflow-v1.0
+git clone https://github.com/Zehelit/agent-workflow-v1.1.git
+Set-Location agent-workflow-v1.1
 python --version
 git rev-parse HEAD
 
@@ -122,19 +122,19 @@ python -X utf8 -B tooling/build-candidate.py --output $build
 if ($LASTEXITCODE -ne 0) { throw 'Build başarısız' }
 $receipt = Get-Content -LiteralPath (Join-Path $build 'build-receipt.json') -Raw | ConvertFrom-Json
 $pin = $receipt.manifest_sha256
-$package = Join-Path $build 'agent-workflow-v1-0'
+$package = Join-Path $build 'agent-workflow-v1-1'
 $entry = Join-Path $package 'scripts/candidate.py'
 $manifest = Join-Path $package 'manifest.json'
 
 # Receipt'i paket dışında koruyun; beklenmedik değişiklikte yeni pin üretmeyin.
 $receipt | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $build 'accepted-build-receipt.json') -Encoding utf8
 $codexRoot = if ($env:CODEX_HOME) { $env:CODEX_HOME } else { Join-Path $env:USERPROFILE '.codex' }
-$destination = Join-Path $codexRoot 'skills/agent-workflow-v1-0'
+$destination = Join-Path $codexRoot 'skills/agent-workflow-v1-1'
 python -X utf8 -B $entry --manifest $manifest --manifest-sha256 $pin --version 1.1 install --destination $destination
 if ($LASTEXITCODE -ne 0) { throw 'Kurulum doğrulanmadı' }
 ```
 
-`activated:false`, dosyaların kurulduğunu belirtir; goal veya worker başlamış olmaz. Kullanıcı klasörüne kurulum tek projeye bağlı değildir. Codex skill seçicisinde **agent-workflow-v1.1** görünen adı veya **`$agent-workflow-v1-0`** teknik adıyla seçin; mevcut sohbetin skill kataloğunun yenilenmesi gerekebilir. Kurulum istemciyi yeniden başlatmaz ve model ayarlarını değiştirmez.
+`activated:false`, dosyaların kurulduğunu belirtir; goal veya worker başlamış olmaz. Kullanıcı klasörüne kurulum tek projeye bağlı değildir. Codex skill seçicisinde **agent-workflow-v1.1** görünen adı veya **`$agent-workflow-v1-1`** teknik adıyla seçin; mevcut sohbetin skill kataloğunun yenilenmesi gerekebilir. Kurulum istemciyi yeniden başlatmaz ve model ayarlarını değiştirmez.
 
 Kurulan girişi ayrı bir kontrol projesinde doğrulayın:
 
@@ -146,11 +146,13 @@ $installedManifest = Join-Path $destination 'manifest.json'
 python -X utf8 -B $installedEntry --manifest $installedManifest --manifest-sha256 $pin --version 1.1 --project $probe --run-id install-check workflow validate
 ```
 
-Bu pasif kontrol canlı goal, Remote veya alt ajan kabul testi değildir. Linux/macOS'ta aynı Python komutları ve `~/.codex/skills/agent-workflow-v1-0` hedefi kullanılabilir; Windows ACL davranışı platforma özeldir.
+Bu pasif kontrol canlı goal, Remote veya alt ajan kabul testi değildir. Linux/macOS'ta aynı Python komutları ve `~/.codex/skills/agent-workflow-v1-1` hedefi kullanılabilir; Windows ACL davranışı platforma özeldir.
 
 ### Güncelleme
 
-Önce size ait eski worker'ları **eski giriş noktası ve pin ile** durdurup gerçek çıkışı doğrulayın. Başka sohbetin aktif kurulumunu kesmeyin. Kurulum dosyaları değiştirilmişse farkları koruyup inceleyin; üzerine körlemesine yazılmaz. Install komutuna `--update` eklemek yalnız sahipliği doğrulanan, değiştirilmemiş kurulumu günceller. Eski çalışma kaydının paket bağını değiştirmeyin; onaylı güncellemeden sonra yeni paketle yeni run kimliği kullanın. [Paket bağı, ACL ve işlem geri alma ayrıntıları](skills/agent-workflow-v1-0/references/coexistence.md).
+Önce size ait eski worker'ları **eski giriş noktası ve pin ile** durdurup gerçek çıkışı doğrulayın. Başka sohbetin aktif kurulumunu kesmeyin. Kurulum dosyaları değiştirilmişse farkları koruyup inceleyin; üzerine körlemesine yazılmaz. Install komutuna `--update` eklemek yalnız sahipliği doğrulanan, değiştirilmemiş kurulumu günceller. Eski çalışma kaydının paket bağını değiştirmeyin; onaylı güncellemeden sonra yeni paketle yeni run kimliği kullanın. [Paket bağı, ACL ve işlem geri alma ayrıntıları](skills/agent-workflow-v1-1/references/coexistence.md).
+
+Önceki teknik kimlikteki kullanıcı kurulumundan geçiş, yeni `agent-workflow-v1-1` klasörüne **temiz kurulum** gerektirir. Eski klasöre `--update` uygulamayın. Yeni paketi doğruladıktan sonra Codex skill yol kayıtlarını mevcut enabled/disabled tercihleriyle taşıyın ve eski paketi keşif kökünün dışında arşivleyin. Eski runtime kayıtlarını yeniden adlandırmayın veya pin'lerini değiştirmeyin. [Teknik kimlik geçişi](skills/agent-workflow-v1-1/references/migration.md).
 
 ## Ajan için kurulum rehberi
 
@@ -174,7 +176,7 @@ python @common watcher renew
 python @common workflow status
 ```
 
-Girdiler gerçek gözlemler ve typed binding içermelidir; örnek değerleri gerçek kanıt diye kullanmayın. [İşletim](skills/agent-workflow-v1-0/references/operations.md), [receipt biçimi](skills/agent-workflow-v1-0/references/native-usage.md), [komut alanları](skills/agent-workflow-v1-0/references/commands.md).
+Girdiler gerçek gözlemler ve typed binding içermelidir; örnek değerleri gerçek kanıt diye kullanmayın. [İşletim](skills/agent-workflow-v1-1/references/operations.md), [receipt biçimi](skills/agent-workflow-v1-1/references/native-usage.md), [komut alanları](skills/agent-workflow-v1-1/references/commands.md).
 
 `tooling/run-lifecycle-check.py` hazırlık, başlatma, gözlem yenileme, post-halt devam ve doğal kapanış için tekrar kullanılabilir araçtır. Host araçlarını kendisi çağıramaz. `timed-test` yalnız açık tanılama modudur. [Girdi biçimi ve örnekler](docs/lifecycle-check.md).
 
@@ -183,7 +185,7 @@ Varsayılan olarak kalan pay **%25** olduğunda checkpoint hazırlanır; **%20**
 ## Testler ve sınırlar
 
 ```powershell
-python -X utf8 -B -m unittest discover -s skills/agent-workflow-v1-0/tests
+python -X utf8 -B -m unittest discover -s skills/agent-workflow-v1-1/tests
 python -X utf8 -B -m unittest discover -s tooling/tests
 ```
 
@@ -195,7 +197,7 @@ AGWF native araçları engelleyen bir güvenlik katmanı veya genel süreç yön
 
 | Yol | İçerik |
 |---|---|
-| `skills/agent-workflow-v1-0/SKILL.md` | Açık çağrı ve ana ajan sözleşmesi |
+| `skills/agent-workflow-v1-1/SKILL.md` | Açık çağrı ve ana ajan sözleşmesi |
 | `candidate-profile.json`, `agents/` — skill içinde | Kimlik, sürüm ve Codex görünümü |
 | `roles/` — skill içinde | Beş rolün ayar, skill ve memory belgeleri |
 | `scripts/` — skill içinde | Sabitlenmiş giriş ve workflow çekirdeği |

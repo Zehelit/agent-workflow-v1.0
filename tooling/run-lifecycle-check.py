@@ -58,7 +58,7 @@ def verify(session):
     manifest=Path(session['manifest'])
     require(sha(manifest)==session['manifest_sha256'],'external manifest pin mismatch')
     data=read(manifest)
-    require(data['identity']=='agent-workflow-v1-0' and data['version']==session['version'],
+    require(data['identity']=='agent-workflow-v1-1' and data['version']==session['version'],
             'package identity/version mismatch')
     root=manifest.parent
     for name,pin in data['files'].items():

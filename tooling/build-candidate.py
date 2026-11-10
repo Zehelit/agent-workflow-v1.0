@@ -6,7 +6,7 @@ from pathlib import Path
 import shutil
 import zipfile
 
-IDENTITY = 'agent-workflow-v1-0'
+IDENTITY = 'agent-workflow-v1-1'
 ROOT = Path(__file__).resolve().parents[1]
 
 def sha(path):
@@ -16,7 +16,7 @@ def encode(value):
     return (json.dumps(value, sort_keys=True, ensure_ascii=False, indent=2) + '\n').encode('utf-8')
 
 def payload_sources(source):
-    package = source / 'skills/agent-workflow-v1-0'
+    package = source / 'skills/agent-workflow-v1-1'
     files = {}
     for path in sorted(package.rglob('*')):
         rel = path.relative_to(package)
@@ -28,7 +28,7 @@ def build(source, output):
     source, output = Path(source).resolve(), Path(output).absolute()
     if output.exists():
         raise ValueError('build destination must be new')
-    if output.is_relative_to(source / 'skills/agent-workflow-v1-0'):
+    if output.is_relative_to(source / 'skills/agent-workflow-v1-1'):
         raise ValueError('build destination overlaps payload source')
     files = payload_sources(source)
     for path in files.values():

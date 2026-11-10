@@ -45,7 +45,7 @@ class RecoveryIntegrityTests(unittest.TestCase):
                  for p in self.package.rglob('*') if p.is_file() and p.relative_to(self.package).parts[0] in payload_roots
                  and '__pycache__' not in p.parts and p.suffix != '.pyc'}
         self.manifest = self.package / 'manifest.json'
-        self.manifest.write_text(json.dumps(dict(schema_version=1, identity='agent-workflow-v1-0', version='1.1', files=files)), encoding='utf-8')
+        self.manifest.write_text(json.dumps(dict(schema_version=1, identity='agent-workflow-v1-1', version='1.1', files=files)), encoding='utf-8')
         self.pin = hashlib.sha256(self.manifest.read_bytes()).hexdigest()
         self.home = self.root / 'home'
         self.counter = 0
@@ -70,7 +70,7 @@ class RecoveryIntegrityTests(unittest.TestCase):
             command = self.candidate_command(path, 'status')
             result = subprocess.run(command, input='{}', capture_output=True, text=True)
             self.assertEqual(result.returncode, 0, result.stderr)
-        base = path / '.agent-workflow-v1-0/runs/run-old' if pinned else None
+        base = path / '.agent-workflow-v1-1/runs/run-old' if pinned else None
         engine = self.m.Workflow(path, self.home, lambda: self.now, state_base=base)
         engine.execute('activate', dict(objective='deliver', **self.evidence(), models={'gpt-6.1-sol': ['high']},
                                         slot_limit=4, inventory=[], observed_at=self.now))

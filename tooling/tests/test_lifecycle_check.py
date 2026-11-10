@@ -25,7 +25,7 @@ class LifecycleCheckTests(unittest.TestCase):
         subprocess.run([sys.executable, '-B', str(ROOT/'tooling/build-candidate.py'), '--output', str(self.build)],
                        check=True, capture_output=True)
         self.receipt = json.loads((self.build/'build-receipt.json').read_text())
-        self.package = self.build/'agent-workflow-v1-0'
+        self.package = self.build/'agent-workflow-v1-1'
         self.session = self.root/'session.json'
 
     def prepare(self, pin=None):
@@ -60,7 +60,7 @@ class LifecycleCheckTests(unittest.TestCase):
     def test_prepare_verifies_pin_without_starting_worker(self):
         with patch.object(m.subprocess, 'run', side_effect=AssertionError('prepare must not spawn')):
             self.prepare()
-        self.assertFalse((self.project/'.agent-workflow-v1-0').exists())
+        self.assertFalse((self.project/'.agent-workflow-v1-1').exists())
         self.assertEqual(m.load_session(self.session)['version'], '1.1')
 
     def test_tampered_entry_and_wrong_pin_refused(self):
@@ -177,7 +177,7 @@ class LifecycleCheckTests(unittest.TestCase):
         m.run(self.session,self.observation())
         session=m.load_session(self.session)
         # Expire an actual receipt in this disposable synthetic test only.
-        source=self.project/'.agent-workflow-v1-0/runs/test-run/watcher/usage-source.json'
+        source=self.project/'.agent-workflow-v1-1/runs/test-run/watcher/usage-source.json'
         saved=json.loads(source.read_text()); saved['observedAt']-=400
         source.write_text(json.dumps(saved))
         deadline=time.monotonic()+6

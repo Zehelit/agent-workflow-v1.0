@@ -12,7 +12,7 @@ import tempfile
 import unittest
 
 ROOT = Path(__file__).resolve().parents[2]
-SPEC = importlib.util.spec_from_file_location('n08_usage', ROOT / 'skills/agent-workflow-v1-0/tools/extract-usage.py')
+SPEC = importlib.util.spec_from_file_location('n08_usage', ROOT / 'skills/agent-workflow-v1-1/tools/extract-usage.py')
 u = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(u)
 
@@ -292,7 +292,7 @@ class ScopedUsage(unittest.TestCase):
         marker='private-'+'sentinel-42'
         bad=self.base/'manifest.json';bad.write_text(u.canonical({'private':marker}),encoding='utf8')
         target=self.base/'output.json'
-        result=subprocess.run([sys.executable,'-B',str(ROOT/'skills/agent-workflow-v1-0/tools/extract-usage.py'),'--manifest',str(bad),'--output',str(target)],capture_output=True,text=True)
+        result=subprocess.run([sys.executable,'-B',str(ROOT/'skills/agent-workflow-v1-1/tools/extract-usage.py'),'--manifest',str(bad),'--output',str(target)],capture_output=True,text=True)
         self.assertEqual(result.returncode,2);self.assertNotIn(marker,result.stdout+result.stderr);self.assertFalse(target.exists())
 
     def test_exact_child_header_mapping(self):
@@ -492,7 +492,7 @@ def main():
     p=argparse.ArgumentParser();p.add_argument('--evidence');a=p.parse_args()
     suite=unittest.defaultTestLoader.loadTestsFromTestCase(ScopedUsage)
     stream=io.StringIO();result=unittest.TextTestRunner(stream=stream,verbosity=0).run(suite)
-    files=['skills/agent-workflow-v1-0/tools/extract-usage.py','skills/agent-workflow-v1-0/tools/telemetry.schema.json','tooling/tests/test_extract_usage.py','skills/agent-workflow-v1-0/references/measurement.md']
+    files=['skills/agent-workflow-v1-1/tools/extract-usage.py','skills/agent-workflow-v1-1/tools/telemetry.schema.json','tooling/tests/test_extract_usage.py','skills/agent-workflow-v1-1/references/measurement.md']
     pins={name:hashlib.sha256((ROOT/name).read_bytes()).hexdigest() for name in files if (ROOT/name).exists()}
     evidence={'schema':'n08_producer_tests_v1','mode':'normal' if __debug__ else 'optimized','tests_run':result.testsRun,
               'failures':len(result.failures),'errors':len(result.errors),'skipped':len(result.skipped),

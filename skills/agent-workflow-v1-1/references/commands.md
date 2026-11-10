@@ -105,7 +105,7 @@ All operations use `scripts/candidate.py --manifest <manifest> --manifest-sha256
 | `workflow <typed-command>` | `--input <json-file>` or stdin | Execute the typed contracts documented above |
 | `coordination` | `--input <json-file>` | Execute a bounded model-free batch; no automatic native dispatch |
 | `watcher` | `start`, `renew`, `stop`, `status`, `once` | Use the private pinned sampler and owned run state |
-| `install` | Explicit `--destination .../agent-workflow-v1-0`; optional `--update` | Verify payload and owned-installation guards |
+| `install` | Explicit `--destination .../agent-workflow-v1-1`; optional `--update` | Verify payload and owned-installation guards |
 
 
 Direct `workflow.py` CLI invocation is refused. It has no installer, export or native role-generation entry. Build distribution files with `tooling/build-candidate.py`; use only the pinned candidate installer for Codex installation. Historical schema conversion is not a candidate CLI command and must never bootstrap a retired installation.

@@ -7,7 +7,7 @@
 Önce paketi üretip harici manifest pin'ini koruyun. `prepare` dosya bütünlüğünü kontrol eder ve yeni oturum dosyası yazar; candidate veya worker çalıştırmaz. Hazırlığı gerçek ölçümden önce bitirin.
 
 ```powershell
-python -X utf8 -B tooling/run-lifecycle-check.py prepare --candidate C:/build/agent-workflow-v1-0/scripts/candidate.py --manifest C:/build/agent-workflow-v1-0/manifest.json --manifest-sha256 PRESERVED_SHA256 --version 1.1 --project C:/project --run-id check-1 --session C:/private/check-1.json
+python -X utf8 -B tooling/run-lifecycle-check.py prepare --candidate C:/build/agent-workflow-v1-1/scripts/candidate.py --manifest C:/build/agent-workflow-v1-1/manifest.json --manifest-sha256 PRESERVED_SHA256 --version 1.1 --project C:/project --run-id check-1 --session C:/private/check-1.json
 ```
 
 `PRESERVED_SHA256` kabul edilen build receipt'indeki gerçek değerdir. Proje dizini mevcut, oturum dosyası yeni olmalıdır. Kaynağı veya paketi değiştirdikten sonra aynı oturumu farklı pin'e yeniden bağlamayın.
@@ -20,7 +20,7 @@ python -X utf8 -B tooling/run-lifecycle-check.py prepare --candidate C:/build/ag
 |---|---|
 | `activation` | Yalnız ilk `run` için, candidate `bind-active-goal` komutunun tam typed payload'u. `native_binding`, eşleşen `app_goal_observation`, objective, yorumlama/procedural kontrol, gerçekten gözlenmiş model/effort listesi, slot limiti, gerçek inventory ve gözlem zamanı. |
 | `app_goal_observation` | Gerçek `get_goal` gözlemi: goal/thread kimliği, objective, goal oluşturma zamanı, status, `source_kind: get_goal`, gerçek kaynak referansı ve `observed_at`; varsa gerçek `updated_at`. |
-| `usage` | [Native receipt sözleşmesindeki](../skills/agent-workflow-v1-0/references/native-usage.md) `source`, `sourceId`, `observedAt`, `result`. Yalnız gerçek gerekli pencereleri saklayın. |
+| `usage` | [Native receipt sözleşmesindeki](../skills/agent-workflow-v1-1/references/native-usage.md) `source`, `sourceId`, `observedAt`, `result`. Yalnız gerçek gerekli pencereleri saklayın. |
 | `inventory` | Gerçek güncel alt ajan kimlik/durum listesi. Gerçekten alt ajan yoksa `[]`. |
 | `checkpoint_files` | Ana ajanın yazdığı dahil kurtarılacak tam proje-relative dosyalar; silinen yolları da ekleyin. Task claim'leri core tarafından ayrıca kapsanır. |
 | `writers_quiescent` | Snapshot öncesinde bütün yazıcıların durduğunu host gerçekten doğruladıysa `true`. Araç bu gözlemi kendi başına üretemez. |
@@ -28,7 +28,7 @@ python -X utf8 -B tooling/run-lifecycle-check.py prepare --candidate C:/build/ag
 | `weekly_exception` | İsteğe bağlı, yalnız ilk `run`: kullanıcının gerçek `exact_quote` değeri ve sınırlı `valid_until` Unix zamanı. Varsayılan bir istisna yoktur. |
 | `resume` | İsteğe bağlı, tam candidate resume payload'u. Yoksa yalnız kaydedilmiş ölçüm eskimesi için `usage_recovery: true` denenir. Gerçek kota/kullanıcı duruşları bundan yetki kazanmaz. |
 
-Native API ayrı goal kimliği vermiyorsa `threadId:createdAt` gibi türetilmiş bir kimlik kullanılabilir; bunun sağlayıcının verdiği kimlik olduğu iddia edilmez. Bütün çağrılarda aynı türetme ve gerçek kaynak zamanları korunmalıdır. Typed alanların ayrıntısı [operations](../skills/agent-workflow-v1-0/references/operations.md) ve [commands](../skills/agent-workflow-v1-0/references/commands.md) belgelerindedir.
+Native API ayrı goal kimliği vermiyorsa `threadId:createdAt` gibi türetilmiş bir kimlik kullanılabilir; bunun sağlayıcının verdiği kimlik olduğu iddia edilmez. Bütün çağrılarda aynı türetme ve gerçek kaynak zamanları korunmalıdır. Typed alanların ayrıntısı [operations](../skills/agent-workflow-v1-1/references/operations.md) ve [commands](../skills/agent-workflow-v1-1/references/commands.md) belgelerindedir.
 
 ## Normal akış
 

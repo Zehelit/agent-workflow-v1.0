@@ -143,7 +143,7 @@ class GoalBindingTests(unittest.TestCase):
         built = subprocess.run([*python, str(repository / 'tooling/build-candidate.py'),
                                 '--output', str(build)], capture_output=True, text=True, timeout=30)
         self.assertEqual(built.returncode, 0, built.stderr)
-        package = build / 'agent-workflow-v1-0'
+        package = build / 'agent-workflow-v1-1'
         pin = json.loads(built.stdout)['manifest_sha256']
         now = time.time()
         payload = self.payload()
@@ -151,7 +151,7 @@ class GoalBindingTests(unittest.TestCase):
             item.update(goal_created_at=now - 3600, observed_at=now)
         payload['observed_at'] = now
         source = self.root / 'binding.json'
-        for entry, run in ((repository / 'skills/agent-workflow-v1-0/scripts/candidate.py', 'source-clock'),
+        for entry, run in ((repository / 'skills/agent-workflow-v1-1/scripts/candidate.py', 'source-clock'),
                            (package / 'scripts/candidate.py', 'staged-clock')):
             with self.subTest(run=run):
                 payload['native_binding']['run_id'] = run
@@ -168,7 +168,7 @@ class GoalBindingTests(unittest.TestCase):
                     package / 'private/limit-watcher/scripts/monitor.py')
                 monitor = importlib.util.module_from_spec(monitor_spec)
                 monitor_spec.loader.exec_module(monitor)
-                watcher = self.root / '.agent-workflow-v1-0/runs' / run / 'watcher'
+                watcher = self.root / '.agent-workflow-v1-1/runs' / run / 'watcher'
                 watcher.mkdir(exist_ok=True)
                 control = monitor.default_control(run)
                 monitor.write(watcher / 'control.json', control)
@@ -198,7 +198,7 @@ class GoalBindingTests(unittest.TestCase):
                         self.assertLess(time.monotonic(), deadline, 'watcher did not exit before fixture cleanup')
                         time.sleep(0.1)
                 self.addCleanup(stop_watcher)
-                state = m.read_json(self.root / '.agent-workflow-v1-0/runs' / run / 'state.json')
+                state = m.read_json(self.root / '.agent-workflow-v1-1/runs' / run / 'state.json')
                 self.assertEqual(state['native_binding']['goal_created_at'], now - 3600)
                 self.assertEqual(state['app_goal_observation']['goal_created_at'], now - 3600)
                 self.assertEqual(state['authorization_events'], [])

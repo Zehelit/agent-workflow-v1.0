@@ -16,7 +16,7 @@ import tempfile
 import time
 
 PACKAGE = Path(__file__).resolve().parents[1]
-IDENTITY = 'agent-workflow-v1-0'
+IDENTITY = 'agent-workflow-v1-1'
 VERSION = '1.1'
 
 class CandidateError(ValueError):
@@ -79,7 +79,7 @@ class Runtime:
         require(required <= set(self.paths), 'manifest omits required runtime dependency')
         self.verify_files()
         profile = read(self.paths['candidate-profile.json'])
-        require(profile == dict(schema_version=1, version=VERSION, identity=IDENTITY, display_name='agent-workflow-v1.1', allow_implicit_invocation=False, namespace='.agent-workflow-v1-0'), 'candidate profile mismatch')
+        require(profile == dict(schema_version=1, version=VERSION, identity=IDENTITY, display_name='agent-workflow-v1.1', allow_implicit_invocation=False, namespace='.agent-workflow-v1-1'), 'candidate profile mismatch')
         watcher_role=read(self.paths['private/limit-watcher/role.json'])['roles']['limit_watcher']
         require(watcher_role['role_file'] == 'limit_watcher.md', 'watcher instruction must be pinned private resource')
         self.core=load_module('workflow', self.paths['scripts/workflow.py'])

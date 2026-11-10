@@ -24,4 +24,4 @@ Gerçek mevcut Codex limit aracı yanıtı yeni yayınlama/okuma yolundan geçti
 
 Canlı AGWF/Remote birlikteliği açılarak denenmedi. Kullanıcının kapalı tutma talimatı sürüyor. Tarihsel Remote hatasının kesin uygulama içi nedeni kanıtlanmış değildir; bu rapor, tespit edilen AGWF kod ve dağıtım sorunlarının düzeltilmesini kaydeder ve OpenAI istemcisindeki bütün hataların giderildiği iddiasında bulunmaz.
 
-İç çalışma sözleşmesi: [native limit ölçümleri](../skills/agent-workflow-v1-0/references/native-usage.md). Resmî protokol arka planı: [OpenAI Docs — Codex App Server](https://learn.chatgpt.com/docs/app-server). Bu protokolü kullanmak için yeni sunucu başlatma yolu artık AGWF ölçüm kodunda bulunmaz.
+İç çalışma sözleşmesi: [native limit ölçümleri](../skills/agent-workflow-v1-1/references/native-usage.md). Resmî protokol arka planı: [OpenAI Docs — Codex App Server](https://learn.chatgpt.com/docs/app-server). Bu protokolü kullanmak için yeni sunucu başlatma yolu artık AGWF ölçüm kodunda bulunmaz.

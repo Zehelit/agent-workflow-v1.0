@@ -50,10 +50,10 @@ class CandidateCoexistenceTests(unittest.TestCase):
         self.preserved = (hashes(self.old), hashes(self.home))
         build = subprocess.run([*PYTHON, str(ROOT / 'tooling/build-candidate.py'), '--output', str(self.base / 'build')], capture_output=True, text=True)
         self.assertEqual(build.returncode, 0, build.stderr + build.stdout)
-        self.package = self.base / 'build/agent-workflow-v1-0'
+        self.package = self.base / 'build/agent-workflow-v1-1'
         self.manifest = self.package / 'manifest.json'
         self.pin = json.loads(build.stdout)['manifest_sha256']
-        self.source = ROOT / 'skills/agent-workflow-v1-0/scripts/candidate.py'
+        self.source = ROOT / 'skills/agent-workflow-v1-1/scripts/candidate.py'
         self.entry = self.package / 'scripts/candidate.py'
 
     def assert_preserved(self):
@@ -84,7 +84,7 @@ class CandidateCoexistenceTests(unittest.TestCase):
         return result
 
     def state(self, run='candidate-run'):
-        return self.project / '.agent-workflow-v1-0/runs' / run
+        return self.project / '.agent-workflow-v1-1/runs' / run
 
     def test_transient_health_read_does_not_block_binding_or_recovery(self):
         candidate = load('candidate_health_race', self.source)
@@ -154,7 +154,7 @@ class CandidateCoexistenceTests(unittest.TestCase):
         self.cli('workflow','usage',run=run,entry=entry,payload=dict(observed_at=time.time(),rateLimits=dict(primary=dict(usedPercent=10,windowDurationMins=300),secondary=dict(usedPercent=10,windowDurationMins=10080))))
 
     def test_source_and_installed_use_separate_full_run_namespaces(self):
-        installed = self.base / 'skills/agent-workflow-v1-0'
+        installed = self.base / 'skills/agent-workflow-v1-1'
         self.cli('install','--destination',str(installed),entry=self.source)
         installed_entry = installed / 'scripts/candidate.py'
         installed_manifest = installed / 'manifest.json'
@@ -431,7 +431,7 @@ class CandidateCoexistenceTests(unittest.TestCase):
         before=stable_state_hashes(self.state())
         self.cli('workflow','observe-authorization',payload=dict(authorization=event,interpretation='mismatch fixture',source_message={key:event[key] for key in ('source_kind','source_id','exact_quote','source_created_at','original_turn_id')}),good=False)
         self.assertEqual(stable_state_hashes(self.state()),before)
-        for reserved in ('.agent-workflow/state.json','.agent-workflow-v1-0/runs/foreign/state.json'):
+        for reserved in ('.agent-workflow/state.json','.agent-workflow-v1-1/runs/foreign/state.json'):
             before = stable_state_hashes(self.state())
             self.cli('workflow','task',payload=dict(id='bad',role='implementer',objective='bad',criteria=['bad'],writes=[reserved]),good=False)
             self.assertEqual(stable_state_hashes(self.state()),before)

@@ -22,6 +22,8 @@ ALLOWED_ROLE_MODELS = {'gpt-6.1-sol', 'gpt-6-astra', 'gpt-6.1-terra'}
 ALLOWED_ROLE_EFFORTS = {'medium', 'high', 'xhigh', 'max', 'ultra'}
 
 PACKAGE = Path(__file__).resolve().parents[1]
+# Previous runtime evidence stays reserved even after the technical identity changes.
+RESERVED_STATE_ROOTS = {'.agent-workflow', '.agent-workflow-v1-0', '.agent-workflow-v1-1'}
 ACTIVE = {"running", "interrupting", "unknown"}
 TERMINAL = {"accepted", "rejected"}
 AUTH_KINDS = {'explicit_task_authorization', 'explicit_goal_continuation',
@@ -579,7 +581,7 @@ def validate_hashes(value, path):
         check_field(name, 'text', path)
         rel = Path(name)
         require(not rel.is_absolute() and '..' not in rel.parts and ':' not in name
-                and rel.parts and rel.parts[0].casefold() not in {'.agent-workflow', '.agent-workflow-v1-0'}, 'unsafe stored file path', path)
+                and rel.parts and rel.parts[0].casefold() not in RESERVED_STATE_ROOTS, 'unsafe stored file path', path)
         require(name == rel.as_posix() and name.casefold() not in folded, 'duplicate or nonnormalized stored path', path)
         folded.add(name.casefold())
         require(sha is None or type(sha) is str and re.fullmatch('[a-f0-9]{64}', sha), 'invalid stored hash', path)
@@ -844,7 +846,7 @@ class Workflow:
         self.root = Path(project).resolve()
         require(self.root.is_dir(), 'project must exist')
         self.home = Path(codex_home).resolve()
-        self.base = Path(state_base) if state_base is not None else self.root / '.agent-workflow-v1-0'
+        self.base = Path(state_base) if state_base is not None else self.root / '.agent-workflow-v1-1'
         require(self.base.is_relative_to(self.root), 'state namespace outside project')
         unlinked(self.base, self.root)
         self.provenance_guard = provenance_guard
@@ -863,7 +865,7 @@ class Workflow:
     def file(self, name):
         rel = Path(name)
         require(not rel.is_absolute() and '..' not in rel.parts and rel.parts, 'relative file path required')
-        require(':' not in str(rel) and rel.parts[0].casefold() not in {'.agent-workflow', '.agent-workflow-v1-0'}, 'reserved path')
+        require(':' not in str(rel) and rel.parts[0].casefold() not in RESERVED_STATE_ROOTS, 'reserved path')
         require(all(part == part.rstrip(' .') and not re.fullmatch(r'(?i)(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\..*)?', part) for part in rel.parts), 'Windows-reserved path')
         path = self.root / rel
         unlinked(path, self.root)
@@ -1315,7 +1317,7 @@ class Workflow:
                     continue
                 unlinked(directory, self.root)
                 marker = directory / 'owner.json'
-                if marker.is_file() and read_json(marker) == {'owner': 'agent-workflow-v1-0', 'project': str(self.root)}:
+                if marker.is_file() and read_json(marker) == {'owner': 'agent-workflow-v1-1', 'project': str(self.root)}:
                     cut(self.fault, 'prune.before', directory)
                     remove_owned_tree(directory, root)
                     cut(self.fault, 'prune.after', directory)
@@ -1692,7 +1694,7 @@ class Workflow:
             checkpoint_id = uuid.uuid4().hex
             directory = self.internal('checkpoints', checkpoint_id)
             directory.mkdir(parents=True)
-            write_json(directory / 'owner.json', {'owner': 'agent-workflow-v1-0', 'project': str(self.root)}, self.fault)
+            write_json(directory / 'owner.json', {'owner': 'agent-workflow-v1-1', 'project': str(self.root)}, self.fault)
             write_json(directory / 'state.json', s, self.fault)
             files = {}
             for name, path in checked.items():

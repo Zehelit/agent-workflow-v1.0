@@ -15,10 +15,10 @@ import unittest
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[3]
-MONITOR_SOURCE = ROOT / 'skills/agent-workflow-v1-0/private/limit-watcher/scripts/monitor.py'
-WORKFLOW_SOURCE = ROOT / 'skills/agent-workflow-v1-0/scripts/workflow.py'
-# Current v1.0 core pin; fixtures supply their helper explicitly.
-WORKFLOW_PIN = 'fb4fa27379475a0a2949fc8a80e9b1b4764ff3d270f35f9a1bc54fa343cc147a'
+MONITOR_SOURCE = ROOT / 'skills/agent-workflow-v1-1/private/limit-watcher/scripts/monitor.py'
+WORKFLOW_SOURCE = ROOT / 'skills/agent-workflow-v1-1/scripts/workflow.py'
+# Current v1.1 core pin; fixtures supply their helper explicitly.
+WORKFLOW_PIN = '8e4b24b10b5d9433d86f3e2644fc17ad16dfb1f9d75dd6cdfe8c271297ce0264'
 
 
 def load(path, name):
@@ -41,8 +41,8 @@ class MonitorTests(unittest.TestCase):
         monitor_bytes, workflow_bytes = MONITOR_SOURCE.read_bytes(), WORKFLOW_SOURCE.read_bytes()
         if hashlib.sha256(workflow_bytes).hexdigest() != WORKFLOW_PIN:
             raise RuntimeError('shared workflow pin changed; coordinator must revalidate dependency')
-        cls.monitor_path = cls.root / 'skills/agent-workflow-v1-0/private/limit-watcher/scripts/monitor.py'
-        workflow_path = cls.root / 'skills/agent-workflow-v1-0/scripts/workflow.py'
+        cls.monitor_path = cls.root / 'skills/agent-workflow-v1-1/private/limit-watcher/scripts/monitor.py'
+        workflow_path = cls.root / 'skills/agent-workflow-v1-1/scripts/workflow.py'
         for path, content in ((cls.monitor_path, monitor_bytes), (workflow_path, workflow_bytes)):
             path.parent.mkdir(parents=True)
             path.write_bytes(content)
@@ -427,7 +427,7 @@ class MonitorTests(unittest.TestCase):
     def test_real_disposable_worker_health_and_explicit_stop(self):
         driver = self._file('worker.py', 'import importlib.util,sys\n'
                 f's=importlib.util.spec_from_file_location("m",{str(self.monitor_path)!r});m=importlib.util.module_from_spec(s);s.loader.exec_module(m)\n'
-                f'm.workflow_schedule=__import__("functools").partial(m.workflow_schedule,helper=__import__("pathlib").Path({str(self.root / "skills/agent-workflow-v1-0/scripts/workflow.py")!r}),helper_sha256={WORKFLOW_PIN!r})\n'
+                f'm.workflow_schedule=__import__("functools").partial(m.workflow_schedule,helper=__import__("pathlib").Path({str(self.root / "skills/agent-workflow-v1-1/scripts/workflow.py")!r}),helper_sha256={WORKFLOW_PIN!r})\n'
                 f'm.measure=lambda *args, **kwargs: {windows()!r}\n'
                 'sys.exit(m.main(["run","--state-dir",sys.argv[1]]))\n')
         owned = self.m.OwnedProcess([sys.executable, str(driver), str(self.base)], stdout=subprocess.PIPE,
@@ -464,7 +464,7 @@ class MonitorTests(unittest.TestCase):
     def test_actual_start_handshake_reports_worker_and_stops(self):
         driver = self._file('start-driver.py', 'import importlib.util,sys\n'
                 f's=importlib.util.spec_from_file_location("m",{str(self.monitor_path)!r});m=importlib.util.module_from_spec(s);s.loader.exec_module(m)\n'
-                f'm.workflow_schedule=__import__("functools").partial(m.workflow_schedule,helper=__import__("pathlib").Path({str(self.root / "skills/agent-workflow-v1-0/scripts/workflow.py")!r}),helper_sha256={WORKFLOW_PIN!r})\n'
+                f'm.workflow_schedule=__import__("functools").partial(m.workflow_schedule,helper=__import__("pathlib").Path({str(self.root / "skills/agent-workflow-v1-1/scripts/workflow.py")!r}),helper_sha256={WORKFLOW_PIN!r})\n'
                 f'm.measure=lambda *args, **kwargs: {windows()!r}\n'
                 'sys.exit(m.main(sys.argv[1:]))\n')
         real_owner = self.m.OwnedProcess

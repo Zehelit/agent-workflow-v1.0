@@ -15,7 +15,7 @@ import unittest
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[3]
-WORKFLOW_PIN = hashlib.sha256((ROOT / 'skills/agent-workflow-v1-0/scripts/workflow.py').read_bytes()).hexdigest()
+WORKFLOW_PIN = hashlib.sha256((ROOT / 'skills/agent-workflow-v1-1/scripts/workflow.py').read_bytes()).hexdigest()
 
 
 class MonitorIntegrationTests(unittest.TestCase):
@@ -23,19 +23,19 @@ class MonitorIntegrationTests(unittest.TestCase):
     def setUpClass(cls):
         cls.fixture = tempfile.TemporaryDirectory(prefix='a11-integration-source-')
         root = Path(cls.fixture.name)
-        workflow = ROOT / 'skills/agent-workflow-v1-0/scripts/workflow.py'
+        workflow = ROOT / 'skills/agent-workflow-v1-1/scripts/workflow.py'
         if hashlib.sha256(workflow.read_bytes()).hexdigest() != WORKFLOW_PIN:
             cls.fixture.cleanup()
             raise RuntimeError('accepted current-core dependency changed; revalidation required')
-        for relative in ('skills/agent-workflow-v1-0/private/limit-watcher/scripts/monitor.py', 'skills/agent-workflow-v1-0/scripts/workflow.py'):
+        for relative in ('skills/agent-workflow-v1-1/private/limit-watcher/scripts/monitor.py', 'skills/agent-workflow-v1-1/scripts/workflow.py'):
             target = root / relative
             target.parent.mkdir(parents=True)
             target.write_bytes((ROOT / relative).read_bytes())
-        source = root / 'skills/agent-workflow-v1-0/private/limit-watcher/scripts/monitor.py'
+        source = root / 'skills/agent-workflow-v1-1/private/limit-watcher/scripts/monitor.py'
         spec = importlib.util.spec_from_file_location('monitor_integration', source)
         cls.m = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(cls.m)
-        cls.schedule = staticmethod(cls.m.workflow_schedule(root / 'skills/agent-workflow-v1-0/scripts/workflow.py', WORKFLOW_PIN))
+        cls.schedule = staticmethod(cls.m.workflow_schedule(root / 'skills/agent-workflow-v1-1/scripts/workflow.py', WORKFLOW_PIN))
         print('A04_A11_INTEGRATION_PINS=' + json.dumps({
             'monitor': hashlib.sha256(source.read_bytes()).hexdigest(),
             'workflow': WORKFLOW_PIN, 'optimized': sys.flags.optimize}), flush=True)

@@ -15,7 +15,7 @@ import time
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
-CORE_TESTS = ROOT / 'skills/agent-workflow-v1-0/tests'
+CORE_TESTS = ROOT / 'skills/agent-workflow-v1-1/tests'
 TOOL_TESTS = ROOT / 'tooling/tests'
 
 # Existing accepted counterexamples are selected, not reimplemented. A11 uses
@@ -36,15 +36,15 @@ GROUPS = {
     'producer_gate': ['test_producer'],
 }
 PIN_PATHS = [
-    'skills/agent-workflow-v1-0/scripts/workflow.py', 'skills/agent-workflow-v1-0/scripts/coordination.py',
-    'skills/agent-workflow-v1-0/tests/test_workflow.py', 'skills/agent-workflow-v1-0/tests/test_inputs.py',
-    'skills/agent-workflow-v1-0/tests/test_authorization.py', 'skills/agent-workflow-v1-0/tests/test_goal_binding.py',
-    'skills/agent-workflow-v1-0/tests/test_coordination.py', 'skills/agent-workflow-v1-0/tests/test_coordination_journal.py',
-    'skills/agent-workflow-v1-0/tests/test_context_acceptance.py', 'skills/agent-workflow-v1-0/tests/test_monitor_integration.py',
-    'skills/agent-workflow-v1-0/private/limit-watcher/scripts/monitor.py', 'tooling/preflight.py', 'tooling/runtime-manifest.schema.json', 'tooling/tests/test_readiness.py',
-    'tooling/check-producer.py', 'skills/agent-workflow-v1-0/tools/render-active-run.py', 'tooling/tests/test_producer.py',
-    'skills/agent-workflow-v1-0/SKILL.md', 'skills/agent-workflow-v1-0/references/context.md', 'skills/agent-workflow-v1-0/references/commands.md',
-] + [path.relative_to(ROOT).as_posix() for path in sorted((ROOT/'skills/agent-workflow-v1-0/roles').glob('*.toml'))]
+    'skills/agent-workflow-v1-1/scripts/workflow.py', 'skills/agent-workflow-v1-1/scripts/coordination.py',
+    'skills/agent-workflow-v1-1/tests/test_workflow.py', 'skills/agent-workflow-v1-1/tests/test_inputs.py',
+    'skills/agent-workflow-v1-1/tests/test_authorization.py', 'skills/agent-workflow-v1-1/tests/test_goal_binding.py',
+    'skills/agent-workflow-v1-1/tests/test_coordination.py', 'skills/agent-workflow-v1-1/tests/test_coordination_journal.py',
+    'skills/agent-workflow-v1-1/tests/test_context_acceptance.py', 'skills/agent-workflow-v1-1/tests/test_monitor_integration.py',
+    'skills/agent-workflow-v1-1/private/limit-watcher/scripts/monitor.py', 'tooling/preflight.py', 'tooling/runtime-manifest.schema.json', 'tooling/tests/test_readiness.py',
+    'tooling/check-producer.py', 'skills/agent-workflow-v1-1/tools/render-active-run.py', 'tooling/tests/test_producer.py',
+    'skills/agent-workflow-v1-1/SKILL.md', 'skills/agent-workflow-v1-1/references/context.md', 'skills/agent-workflow-v1-1/references/commands.md',
+] + [path.relative_to(ROOT).as_posix() for path in sorted((ROOT/'skills/agent-workflow-v1-1/roles').glob('*.toml'))]
 
 
 def sha(path): return hashlib.sha256(path.read_bytes()).hexdigest()
@@ -114,11 +114,11 @@ def load_tests():
         if str(path) not in sys.path: sys.path.insert(0, str(path))
     module = importlib.import_module('test_monitor_integration')
     historical = module.WORKFLOW_PIN
-    current = sha(ROOT / 'skills/agent-workflow-v1-0/scripts/workflow.py')
+    current = sha(ROOT / 'skills/agent-workflow-v1-1/scripts/workflow.py')
     # Explicit current-source revalidation of accepted tests in disposable copy
     # fixtures, retaining the historical suite bytes and baseline pin in output.
     module.WORKFLOW_PIN = current
-    return dict(test_path='skills/agent-workflow-v1-0/tests/test_monitor_integration.py',
+    return dict(test_path='skills/agent-workflow-v1-1/tests/test_monitor_integration.py',
                 historical_dependency_sha256=historical, tested_dependency_sha256=current,
                 method='in_memory_dependency_pin_override_for_disposable_source_copy')
 
@@ -164,7 +164,7 @@ def main(argv=None):
     parser.add_argument('--metadata', help='strict JSON rejection/rework metadata; omission means no observed rejection, cost unknown')
     parser.add_argument('--expected-pins', help='strict JSON exact source pin map for frozen handoff rerun')
     args = parser.parse_args(argv)
-    spec = importlib.util.spec_from_file_location('producer_json', ROOT/'skills/agent-workflow-v1-0/scripts/workflow.py')
+    spec = importlib.util.spec_from_file_location('producer_json', ROOT/'skills/agent-workflow-v1-1/scripts/workflow.py')
     engine = importlib.util.module_from_spec(spec); spec.loader.exec_module(engine)
     try:
         metadata = engine.read_json(Path(args.metadata)) if args.metadata else dict(rejections=[], rework_seconds=None)

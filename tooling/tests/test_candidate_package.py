@@ -23,13 +23,62 @@ class CandidatePackageTests(unittest.TestCase):
     def test_version_11_manifest_profile_and_runtime_agree(self):
         build, receipt = self.build('version-11')
         self.assertEqual(receipt['version'], '1.1')
-        package = build / 'agent-workflow-v1-0'
+        self.assertEqual(receipt['identity'], 'agent-workflow-v1-1')
+        package = build / 'agent-workflow-v1-1'
         profile = json.loads((package/'candidate-profile.json').read_text(encoding='utf-8'))
         manifest = json.loads((package/'manifest.json').read_text(encoding='utf-8'))
         self.assertEqual(profile['version'], '1.1')
         self.assertEqual(manifest['version'], '1.1')
-        self.assertEqual(profile['identity'], 'agent-workflow-v1-0')
+        self.assertEqual(profile['identity'], 'agent-workflow-v1-1')
         self.assertEqual(profile['display_name'], 'agent-workflow-v1.1')
+
+    def test_version_11_new_run_preserves_previous_identity_records(self):
+        build, receipt = self.build('identity-isolation')
+        project = self.base / 'identity-project'
+        legacy = project / ('.agent-workflow-v1-' + '0') / 'runs/old-run'
+        legacy.mkdir(parents=True)
+        (legacy / 'run-binding.json').write_bytes(b'{"historical":"immutable evidence"}')
+        before = hashes(legacy)
+        result = self.cli(build, receipt, '--project', str(project), '--run-id', 'identity-check',
+                          'workflow', 'validate')
+        self.assertEqual(json.loads(result.stdout)['identity'], 'agent-workflow-v1-1')
+        current = project / '.agent-workflow-v1-1/runs/identity-check'
+        self.assertTrue((current / 'run-binding.json').is_file())
+        self.assertEqual(json.loads((current / 'run-binding.json').read_bytes())['identity'],
+                         'agent-workflow-v1-1')
+        self.assertEqual(hashes(legacy), before)
+
+    def test_version_11_refuses_previous_manifest_identity_without_binding(self):
+        build, receipt = self.build('identity-refusal')
+        package = build / receipt['identity']
+        manifest = package / 'manifest.json'
+        data = json.loads(manifest.read_bytes())
+        data['identity'] = 'agent-workflow-v1-' + '0'
+        manifest.write_text(json.dumps(data), encoding='utf-8')
+        receipt['manifest_sha256'] = hashlib.sha256(manifest.read_bytes()).hexdigest()
+        project = self.base / 'refusal-project'
+        project.mkdir()
+        before = hashes(project)
+        self.cli(build, receipt, '--project', str(project), '--run-id', 'refuse-old',
+                 'workflow', 'validate', good=False)
+        self.assertEqual(hashes(project), before)
+        self.assertFalse((project / '.agent-workflow-v1-1').exists())
+
+    def test_version_11_reserves_previous_and_current_state_paths(self):
+        path = ROOT / 'skills/agent-workflow-v1-1/scripts/workflow.py'
+        spec = importlib.util.spec_from_file_location('identity_workflow', path)
+        workflow = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(workflow)
+        project = self.base / 'reserved-project'
+        project.mkdir()
+        engine = workflow.Workflow(project, self.base, role_catalog={})
+        for namespace in ('.agent-workflow', '.agent-workflow-v1-' + '0', '.agent-workflow-v1-1'):
+            with self.subTest(namespace=namespace):
+                name = namespace + '/runs/foreign/state.json'
+                with self.assertRaises(workflow.Error):
+                    engine.file(name)
+                with self.assertRaises(workflow.Error):
+                    workflow.validate_hashes({name: '0' * 64}, '$.files')
 
     def setUp(self):
         self.temp=tempfile.TemporaryDirectory(prefix='candidate-package-')
@@ -43,7 +92,7 @@ class CandidatePackageTests(unittest.TestCase):
         return dest, json.loads(result.stdout)
 
     def cli(self, build, receipt, *commands, good=True):
-        package=build/'agent-workflow-v1-0'
+        package=build/'agent-workflow-v1-1'
         result=subprocess.run([*PYTHON,str(package/'scripts/candidate.py'),'--manifest',str(package/'manifest.json'),
             '--manifest-sha256',receipt['manifest_sha256'],'--version','1.1',*commands],capture_output=True,text=True,timeout=15)
         if good:self.assertEqual(result.returncode,0,result.stderr+result.stdout)
@@ -54,17 +103,17 @@ class CandidatePackageTests(unittest.TestCase):
         a,ar=self.build('a');b,br=self.build('b')
         self.assertEqual(ar,br)
         self.assertEqual(hashes(a),hashes(b))
-        package=a/'agent-workflow-v1-0'
+        package=a/'agent-workflow-v1-1'
         skill=(package/'SKILL.md').read_text(encoding='utf-8')
-        self.assertIn('name: agent-workflow-v1-0',skill)
+        self.assertIn('name: agent-workflow-v1-1',skill)
         interface=(package/'agents/openai.yaml').read_text(encoding='utf-8')
         self.assertIn('display_name: "agent-workflow-v1.1"',interface)
         self.assertIn('allow_implicit_invocation: false',interface)
         manifest=json.loads((package/'manifest.json').read_bytes())
-        self.assertEqual(manifest['files']['private/limit-watcher/scripts/monitor.py'],hashlib.sha256((ROOT/'skills/agent-workflow-v1-0/private/limit-watcher/scripts/monitor.py').read_bytes()).hexdigest())
-        with zipfile.ZipFile(a/'agent-workflow-v1-0.zip') as archive:
+        self.assertEqual(manifest['files']['private/limit-watcher/scripts/monitor.py'],hashlib.sha256((ROOT/'skills/agent-workflow-v1-1/private/limit-watcher/scripts/monitor.py').read_bytes()).hexdigest())
+        with zipfile.ZipFile(a/'agent-workflow-v1-1.zip') as archive:
             self.assertIsNone(archive.testzip())
-            self.assertTrue(all(name.startswith('agent-workflow-v1-0/') for name in archive.namelist()))
+            self.assertTrue(all(name.startswith('agent-workflow-v1-1/') for name in archive.namelist()))
             self.assertFalse(any('__pycache__' in name or '/tests/' in name for name in archive.namelist()))
             skill_paths = {'SKILL.md', 'private/limit-watcher/SKILL.md'} | {
                 'roles/' + role + '/SKILL.md' for role in
@@ -72,12 +121,12 @@ class CandidatePackageTests(unittest.TestCase):
             memory_paths = {'private/limit-watcher/MEMORY.md'} | {
                 'roles/' + role + '/MEMORY.md' for role in
                 ('architect', 'coordinator', 'implementer', 'researcher', 'verifier')}
-            packaged = {name.removeprefix('agent-workflow-v1-0/') for name in archive.namelist()}
+            packaged = {name.removeprefix('agent-workflow-v1-1/') for name in archive.namelist()}
             self.assertEqual({name for name in packaged if name.endswith('SKILL.md')}, skill_paths)
             self.assertEqual({name for name in packaged if name.endswith('MEMORY.md')}, memory_paths)
             for name in skill_paths | memory_paths:
                 self.assertEqual(manifest['files'][name], hashlib.sha256(
-                    archive.read('agent-workflow-v1-0/' + name)).hexdigest())
+                    archive.read('agent-workflow-v1-1/' + name)).hexdigest())
         result=subprocess.run([*PYTHON,str(ROOT/'tooling/build-candidate.py'),'--output',str(a)],capture_output=True,text=True)
         self.assertNotEqual(result.returncode,0)
 
@@ -87,7 +136,7 @@ class CandidatePackageTests(unittest.TestCase):
         except ImportError:
             self.skipTest('PyYAML is required to parse Codex skill metadata')
         build, receipt = self.build('invocation-policy')
-        package = build / 'agent-workflow-v1-0'
+        package = build / 'agent-workflow-v1-1'
         manifest = json.loads((package / 'manifest.json').read_bytes())
         skills = sorted(package.rglob('SKILL.md'))
         self.assertEqual(len(skills), 7)
@@ -102,7 +151,7 @@ class CandidatePackageTests(unittest.TestCase):
 
     def test_fresh_noop_update_edited_refusal_without_archive(self):
         build,receipt=self.build('original')
-        dest=self.base/'skills/agent-workflow-v1-0'
+        dest=self.base/'skills/agent-workflow-v1-1'
         old=self.base/'skills/unrelated-reader'
         watcher=self.base/'skills/unrelated-skill'
         old.mkdir(parents=True);watcher.mkdir()
@@ -121,14 +170,14 @@ class CandidatePackageTests(unittest.TestCase):
         self.assertEqual(hashes(dest),before)
         edited.write_bytes(raw)
         source=self.base/'changed-source'
-        shutil.copytree(ROOT/'skills/agent-workflow-v1-0',source/'skills/agent-workflow-v1-0',ignore=shutil.ignore_patterns('__pycache__','tests'))
-        changed=source/'skills/agent-workflow-v1-0/references/coexistence.md';changed.write_bytes(changed.read_bytes()+b'\nApproved staging update fixture.\n')
+        shutil.copytree(ROOT/'skills/agent-workflow-v1-1',source/'skills/agent-workflow-v1-1',ignore=shutil.ignore_patterns('__pycache__','tests'))
+        changed=source/'skills/agent-workflow-v1-1/references/coexistence.md';changed.write_bytes(changed.read_bytes()+b'\nApproved staging update fixture.\n')
         updated,updated_receipt=self.build('updated',source)
         self.cli(updated,updated_receipt,'install','--destination',str(dest),good=False)
         self.assertEqual(hashes(dest),original)
         self.cli(updated,updated_receipt,'install','--destination',str(dest),'--update')
         self.assertNotEqual(hashes(dest),original)
-        backup=dest.parent/'.agent-workflow-v1-0-rollback.zip'
+        backup=dest.parent/'.agent-workflow-v1-1-rollback.zip'
         self.assertFalse(backup.exists())
         self.cli(updated,updated_receipt,'rollback','--destination',str(dest),good=False)
         self.assertFalse(list(dest.parent.glob('candidate-install-*')))
@@ -136,7 +185,7 @@ class CandidatePackageTests(unittest.TestCase):
 
     def test_generated_bytecode_does_not_block_an_owned_update(self):
         original, receipt = self.build('bytecode-original')
-        dest = self.base / 'bytecode-skills/agent-workflow-v1-0'
+        dest = self.base / 'bytecode-skills/agent-workflow-v1-1'
         self.cli(original, receipt, 'install', '--destination', str(dest))
         cache = dest / 'scripts/__pycache__/workflow.cpython-312.pyc'
         cache.parent.mkdir()
@@ -145,9 +194,9 @@ class CandidatePackageTests(unittest.TestCase):
         self.assertFalse(json.loads(noop.stdout)['changed'])
 
         source = self.base / 'bytecode-changed-source'
-        shutil.copytree(ROOT / 'skills/agent-workflow-v1-0', source / 'skills/agent-workflow-v1-0',
+        shutil.copytree(ROOT / 'skills/agent-workflow-v1-1', source / 'skills/agent-workflow-v1-1',
                         ignore=shutil.ignore_patterns('__pycache__', 'tests'))
-        changed = source / 'skills/agent-workflow-v1-0/references/coexistence.md'
+        changed = source / 'skills/agent-workflow-v1-1/references/coexistence.md'
         changed.write_bytes(changed.read_bytes() + b'\nBytecode update fixture.\n')
         updated, updated_receipt = self.build('bytecode-updated', source)
         applied = self.cli(updated, updated_receipt, 'install', '--destination', str(dest), '--update')
@@ -160,15 +209,15 @@ class CandidatePackageTests(unittest.TestCase):
 
     def test_failed_publication_restores_existing_package(self):
         original,receipt=self.build('transaction-original')
-        dest=self.base/'transaction-skills/agent-workflow-v1-0'
+        dest=self.base/'transaction-skills/agent-workflow-v1-1'
         self.cli(original,receipt,'install','--destination',str(dest))
         before=hashes(dest)
         source=self.base/'transaction-source'
-        shutil.copytree(ROOT/'skills/agent-workflow-v1-0',source/'skills/agent-workflow-v1-0',ignore=shutil.ignore_patterns('__pycache__','tests'))
-        changed=source/'skills/agent-workflow-v1-0/references/coexistence.md'
+        shutil.copytree(ROOT/'skills/agent-workflow-v1-1',source/'skills/agent-workflow-v1-1',ignore=shutil.ignore_patterns('__pycache__','tests'))
+        changed=source/'skills/agent-workflow-v1-1/references/coexistence.md'
         changed.write_bytes(changed.read_bytes()+b'\nTransaction test.\n')
         build,pin=self.build('transaction-updated',source)
-        package=build/'agent-workflow-v1-0'
+        package=build/'agent-workflow-v1-1'
         spec=importlib.util.spec_from_file_location('transaction_candidate',package/'scripts/candidate.py')
         candidate=importlib.util.module_from_spec(spec);spec.loader.exec_module(candidate)
         runtime=candidate.Runtime(argparse.Namespace(manifest=str(package/'manifest.json'),
@@ -187,15 +236,15 @@ class CandidatePackageTests(unittest.TestCase):
 
     def test_failed_restoration_keeps_only_copy_for_recovery(self):
         original,receipt=self.build('recovery-original')
-        dest=self.base/'recovery-skills/agent-workflow-v1-0'
+        dest=self.base/'recovery-skills/agent-workflow-v1-1'
         self.cli(original,receipt,'install','--destination',str(dest))
         before=hashes(dest)
         source=self.base/'recovery-source'
-        shutil.copytree(ROOT/'skills/agent-workflow-v1-0',source/'skills/agent-workflow-v1-0',ignore=shutil.ignore_patterns('__pycache__','tests'))
-        changed=source/'skills/agent-workflow-v1-0/references/coexistence.md'
+        shutil.copytree(ROOT/'skills/agent-workflow-v1-1',source/'skills/agent-workflow-v1-1',ignore=shutil.ignore_patterns('__pycache__','tests'))
+        changed=source/'skills/agent-workflow-v1-1/references/coexistence.md'
         changed.write_bytes(changed.read_bytes()+b'\nRecovery test.\n')
         build,pin=self.build('recovery-updated',source)
-        package=build/'agent-workflow-v1-0'
+        package=build/'agent-workflow-v1-1'
         spec=importlib.util.spec_from_file_location('recovery_candidate',package/'scripts/candidate.py')
         candidate=importlib.util.module_from_spec(spec);spec.loader.exec_module(candidate)
         runtime=candidate.Runtime(argparse.Namespace(manifest=str(package/'manifest.json'),
@@ -221,8 +270,8 @@ class CandidatePackageTests(unittest.TestCase):
         result=self.cli(build,receipt,'--project',str(project),'--run-id','direct-entry',
             'workflow','validate')
         response=json.loads(result.stdout)
-        self.assertEqual(response['identity'],'agent-workflow-v1-0')
-        run=project/'.agent-workflow-v1-0/runs/direct-entry'
+        self.assertEqual(response['identity'],'agent-workflow-v1-1')
+        run=project/'.agent-workflow-v1-1/runs/direct-entry'
         self.assertTrue((run/'run-binding.json').is_file())
         self.assertFalse((run/'watcher').exists())
         self.assertFalse((run/'state.json').exists())
@@ -239,14 +288,14 @@ class CandidatePackageTests(unittest.TestCase):
             user_lines=[line for line in lines if identity.casefold()+':(i)' in line]
             self.assertTrue(any('(f)' in line and '(deny)' not in line for line in user_lines),path)
         command(self.base,'/reset')
-        dest=self.base/'skills/agent-workflow-v1-0'
+        dest=self.base/'skills/agent-workflow-v1-1'
         original,receipt=self.build('acl-original')
         self.cli(original,receipt,'install','--destination',str(dest))
         for path in (dest,dest/'SKILL.md',dest/'scripts/candidate.py'):
             assert_inherited_full_access(path)
         source=self.base/'acl-updated-source'
-        shutil.copytree(ROOT/'skills/agent-workflow-v1-0',source/'skills/agent-workflow-v1-0',ignore=shutil.ignore_patterns('__pycache__','tests'))
-        changed=source/'skills/agent-workflow-v1-0/references/coexistence.md'
+        shutil.copytree(ROOT/'skills/agent-workflow-v1-1',source/'skills/agent-workflow-v1-1',ignore=shutil.ignore_patterns('__pycache__','tests'))
+        changed=source/'skills/agent-workflow-v1-1/references/coexistence.md'
         changed.write_bytes(changed.read_bytes()+b'\nACL update fixture.\n')
         updated,updated_receipt=self.build('acl-updated',source)
         self.cli(updated,updated_receipt,'install','--destination',str(dest),'--update')

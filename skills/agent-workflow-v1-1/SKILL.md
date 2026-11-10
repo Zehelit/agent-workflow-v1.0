@@ -1,5 +1,5 @@
 ---
-name: agent-workflow-v1-0
+name: agent-workflow-v1-1
 description: Coordinate substantial project work across coding, research, writing and analysis; delegate bounded tasks when useful.
 ---
 

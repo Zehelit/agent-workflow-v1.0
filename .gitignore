@@ -1,5 +1,7 @@
 __pycache__/
 *.py[cod]
+.agent-workflow-v1-1/
+# Historical runtime evidence is preserved, never published as source.
 .agent-workflow-v1-0/
 .codex-remote-attachments/
 .venv/

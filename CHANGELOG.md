@@ -22,7 +22,8 @@
 
 ### Uyumluluk ve kanıt sınırları
 
-- Paket/görünen sürüm 1.1; teknik skill kimliği ve run namespace'i agent-workflow-v1-0 olarak korunur.
+- Paket/görünen sürüm, teknik skill kimliği, kurulum klasörü ve yeni run namespace'i birlikte 1.1'e taşındı: `$agent-workflow-v1-1`, `agent-workflow-v1-1/`, `.agent-workflow-v1-1/runs/`.
+- Önceki paket kimliği yeni manifestlerde kabul edilmez. Eski çalışma kayıtları değişmez tarihsel kanıt olarak korunur, yeni pakete otomatik bağlanmaz; eski runtime alanları dosya sahipliği ve restore işlemlerinde ayrılmış kalır.
 - Paket güncellemesi eski koşumun immutable bağını değiştirmez; aktif kurulumu yerinde düzenlemeyin.
 - Python 3.11+ ve standart kütüphane; ikinci Codex sunucusu veya bağımsız native usage erişimi yok.
 - İzole testler sentetik host gözlemleri ve gerçek Python worker süreçleri kullanır. Canlı Remote/Continue ve arayüz zamanlama kabulü ayrıca sınanmalıdır.

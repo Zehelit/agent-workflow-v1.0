@@ -19,7 +19,7 @@ class ProducerTests(unittest.TestCase):
     def rejection(self, **kwargs):
         return dict(defect_id='defect-1', defect_class='pin_drift', reproduction='selector detects restored stale bytes',
                     corrector_id='one-writer', review_task='fresh-review', revision='r2',
-                    source_pins={'skills/agent-workflow-v1-0/scripts/workflow.py': '0'*64}, **kwargs)
+                    source_pins={'skills/agent-workflow-v1-1/scripts/workflow.py': '0'*64}, **kwargs)
 
     def fixture(self, red=False):
         module = types.ModuleType('producer_red_fixture')
@@ -83,10 +83,10 @@ class ProducerTests(unittest.TestCase):
     def test_declared_changed_path_is_always_pinned(self):
         selector = p.GROUPS['A04'][0]
         with patch.object(p, 'GROUPS', {'A04': [selector]}):
-            result = p.gate(['skills/agent-workflow-v1-0/references/operations.md'], 'union pin contract', self.metadata(), io.StringIO())
+            result = p.gate(['skills/agent-workflow-v1-1/references/operations.md'], 'union pin contract', self.metadata(), io.StringIO())
         self.assertTrue(result['producer_pass'])
         self.assertEqual(result['groups']['A04']['selectors'], [selector])
-        self.assertEqual(result['source_pins']['skills/agent-workflow-v1-0/references/operations.md'], p.sha(ROOT/'skills/agent-workflow-v1-0/references/operations.md'))
+        self.assertEqual(result['source_pins']['skills/agent-workflow-v1-1/references/operations.md'], p.sha(ROOT/'skills/agent-workflow-v1-1/references/operations.md'))
         self.assertTrue(set(p.PIN_PATHS) <= set(result['source_pins']))
 
     def test_declared_markdown_drift_and_incomplete_expected_union_reject(self):
