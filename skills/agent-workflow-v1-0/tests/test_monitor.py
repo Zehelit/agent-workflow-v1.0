@@ -50,7 +50,7 @@ class MonitorTests(unittest.TestCase):
                 clock[0]+=100
                 if clock[0]>=500:m.write(base/'control.json',dict(control,active=False,expiresAt=0))
                 return False
-            def result(previous,current):return {'action':'CONTINUE','at':clock[0],
+            def result(previous,current,measurer=None,now=None,schedule=None):return {'action':'CONTINUE','at':clock[0],
                     'next_check_at':clock[0]+300,'policy':m.policy_card(current,clock[0])}
             real_event=m.threading.Event
             stopped=real_event()

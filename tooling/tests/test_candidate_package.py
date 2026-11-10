@@ -20,6 +20,17 @@ def hashes(root):
     return {path.relative_to(root).as_posix():hashlib.sha256(path.read_bytes()).hexdigest() for path in root.rglob('*') if path.is_file()}
 
 class CandidatePackageTests(unittest.TestCase):
+    def test_version_11_manifest_profile_and_runtime_agree(self):
+        build, receipt = self.build('version-11')
+        self.assertEqual(receipt['version'], '1.1')
+        package = build / 'agent-workflow-v1-0'
+        profile = json.loads((package/'candidate-profile.json').read_text(encoding='utf-8'))
+        manifest = json.loads((package/'manifest.json').read_text(encoding='utf-8'))
+        self.assertEqual(profile['version'], '1.1')
+        self.assertEqual(manifest['version'], '1.1')
+        self.assertEqual(profile['identity'], 'agent-workflow-v1-0')
+        self.assertEqual(profile['display_name'], 'agent-workflow-v1.1')
+
     def setUp(self):
         self.temp=tempfile.TemporaryDirectory(prefix='candidate-package-')
         self.addCleanup(self.temp.cleanup)
@@ -34,7 +45,7 @@ class CandidatePackageTests(unittest.TestCase):
     def cli(self, build, receipt, *commands, good=True):
         package=build/'agent-workflow-v1-0'
         result=subprocess.run([*PYTHON,str(package/'scripts/candidate.py'),'--manifest',str(package/'manifest.json'),
-            '--manifest-sha256',receipt['manifest_sha256'],'--version','1.0',*commands],capture_output=True,text=True,timeout=15)
+            '--manifest-sha256',receipt['manifest_sha256'],'--version','1.1',*commands],capture_output=True,text=True,timeout=15)
         if good:self.assertEqual(result.returncode,0,result.stderr+result.stdout)
         else:self.assertNotEqual(result.returncode,0,result.stdout)
         return result
@@ -47,7 +58,7 @@ class CandidatePackageTests(unittest.TestCase):
         skill=(package/'SKILL.md').read_text(encoding='utf-8')
         self.assertIn('name: agent-workflow-v1-0',skill)
         interface=(package/'agents/openai.yaml').read_text(encoding='utf-8')
-        self.assertIn('display_name: "agent-workflow-v1.0"',interface)
+        self.assertIn('display_name: "agent-workflow-v1.1"',interface)
         self.assertIn('allow_implicit_invocation: false',interface)
         manifest=json.loads((package/'manifest.json').read_bytes())
         self.assertEqual(manifest['files']['private/limit-watcher/scripts/monitor.py'],hashlib.sha256((ROOT/'skills/agent-workflow-v1-0/private/limit-watcher/scripts/monitor.py').read_bytes()).hexdigest())
@@ -161,7 +172,7 @@ class CandidatePackageTests(unittest.TestCase):
         spec=importlib.util.spec_from_file_location('transaction_candidate',package/'scripts/candidate.py')
         candidate=importlib.util.module_from_spec(spec);spec.loader.exec_module(candidate)
         runtime=candidate.Runtime(argparse.Namespace(manifest=str(package/'manifest.json'),
-            manifest_sha256=pin['manifest_sha256'],version='1.0',mode='install'))
+            manifest_sha256=pin['manifest_sha256'],version='1.1',mode='install'))
         original_rename=Path.rename
         def fail_publish(path,target):
             if path.name=='package' and Path(target)==dest:
@@ -188,7 +199,7 @@ class CandidatePackageTests(unittest.TestCase):
         spec=importlib.util.spec_from_file_location('recovery_candidate',package/'scripts/candidate.py')
         candidate=importlib.util.module_from_spec(spec);spec.loader.exec_module(candidate)
         runtime=candidate.Runtime(argparse.Namespace(manifest=str(package/'manifest.json'),
-            manifest_sha256=pin['manifest_sha256'],version='1.0',mode='install'))
+            manifest_sha256=pin['manifest_sha256'],version='1.1',mode='install'))
         original_rename=Path.rename
         def deny_destination(path,target):
             if Path(target)==dest:

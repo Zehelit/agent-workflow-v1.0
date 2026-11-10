@@ -18,7 +18,7 @@ ROOT = Path(__file__).resolve().parents[3]
 MONITOR_SOURCE = ROOT / 'skills/agent-workflow-v1-0/private/limit-watcher/scripts/monitor.py'
 WORKFLOW_SOURCE = ROOT / 'skills/agent-workflow-v1-0/scripts/workflow.py'
 # Current v1.0 core pin; fixtures supply their helper explicitly.
-WORKFLOW_PIN = '339b743a721d5bffb6e6cfe27e0ce9ae640c0ea4d711e2d19da3873b6fd20953'
+WORKFLOW_PIN = 'fb4fa27379475a0a2949fc8a80e9b1b4764ff3d270f35f9a1bc54fa343cc147a'
 
 
 def load(path, name):
@@ -217,6 +217,7 @@ class MonitorTests(unittest.TestCase):
                         self.assertEqual(self.cli(command)[0], 2)
                     call.assert_not_called()
                 self.assertEqual((self.base / 'control.json').read_bytes(), before)
+        valid['heartbeatAt'] = time.time()
         self.m.write(self.base / 'health.json', valid)
         self.assertEqual(self.m.read_health(self.base)['history'], valid['history'])
         self.assertTrue(self.m.status(self.base)['health']['healthy'])
@@ -318,6 +319,36 @@ class MonitorTests(unittest.TestCase):
         new_control = self.m.load_control(self.base)
         self.assertNotIn('continuationQuote', new_control)
         self.assertEqual(new_control['nativeTransition']['sourceId'], 'receipt-new')
+
+    def test_expired_receipt_has_technical_recovery_without_invented_continuation(self):
+        saved = dict(at=self.now-5, action='SAVE_AND_STOP', exitReason='measurement_failure',
+                     diagnosticCode='usage_receipt_expired', policy=self.m.policy_card(self.control, self.now-5))
+        self.m.latch(self.base, saved, self.control)
+        self.m.write(self.base / 'latest.json', saved)
+        with patch.object(self.m, 'measure', return_value=windows()):
+            code, result = self.cli('once', '--new-epoch', '--run-id', self.control['runId'],
+                                    '--usage-recovery-at', str(self.now-1),
+                                    '--usage-recovery-receipt', 'active-goal-receipt')
+        self.assertEqual(code, 0)
+        self.assertEqual(result['action'], 'CONTINUE')
+        control = self.m.load_control(self.base)
+        self.assertNotIn('continuationQuote', control)
+        self.assertNotIn('nativeTransition', control)
+        self.assertEqual(control['usageRecovery']['sourceId'], 'active-goal-receipt')
+        self.assertIsNone(self.m.latched_result(self.base, control))
+        self.assertEqual(self.m.read(self.base / 'save-latch.json')['result'], saved)
+
+    def test_technical_recovery_never_clears_actual_threshold_or_other_failures(self):
+        for saved in (self.sample(95, at=self.now-5),
+                      dict(at=self.now-5, action='SAVE_AND_STOP', exitReason='measurement_failure',
+                           diagnosticCode='usage_receipt_invalid')):
+            self.m.latch(self.base, saved, self.control)
+            self.m.write(self.base / 'latest.json', saved)
+            with patch.object(self.m, 'measure', side_effect=AssertionError('must not reach measurement')):
+                code, _ = self.cli('once', '--new-epoch', '--run-id', self.control['runId'],
+                                   '--usage-recovery-at', str(self.now-1),
+                                   '--usage-recovery-receipt', 'active-goal-receipt')
+            self.assertEqual(code, 2)
 
     def test_live_health_lease_sample_and_heartbeat_are_separate(self):
         self.marker()
@@ -542,7 +573,7 @@ class MonitorTests(unittest.TestCase):
                        'validFrom': self.now - 1, 'validUntil': self.now + 0.3, 'decisionWindows': [300]})
         self.m.write(self.base / 'control.json', control)
         calls = []
-        with patch.object(self.m, 'measure', side_effect=lambda: calls.append(time.time()) or windows(20, 99)):
+        with patch.object(self.m, 'measure', side_effect=lambda *args, **kwargs: calls.append(time.time()) or windows(20, 99)):
             result = self.m.run(self.base)
         self.assertEqual(result['exitReason'], 'usage_threshold')
         self.assertEqual(len(calls), 2)

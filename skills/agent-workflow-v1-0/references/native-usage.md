@@ -1,6 +1,6 @@
 # Native usage receipts
 
-Use only in an explicitly authorized, enabled AGWF run. Updating this package or publishing usage data does not re-enable a disabled workflow.
+Use only in an explicitly authorized, enabled AGWF run. A current explicit skill invocation requires startup for that scoped run; when native goal creation is forbidden, use manual monitoring as described in [operations](operations.md). Updating this package, discussing the skill or publishing usage data does not by itself re-enable a disabled workflow.
 
 The main agent calls `mcp__codex_app__get_usage_limits` through the existing Codex connection. Python does not open a second app-server, select another CLI, read authentication files, attach to private transports or make model requests. The background worker watches supplied receipts and enforces freshness; the host tool still needs main-agent calls at work boundaries.
 
@@ -27,7 +27,7 @@ These numbers are examples. Preserve the actual tool observation time, receipt i
 
 To publish a fresh reading during work, use `watcher ingest --usage-input USAGE.json` or the `--usage-input` option on a workflow/coordination command. `ingest` does not activate a workflow, start a worker, renew authorization or clear a SAVE latch. A new source file triggers evaluation without waiting for the old deadline. Status can briefly show the previous evaluation while the owned worker consumes it; wait for a fresh healthy status before consequential dispatch.
 
-Main refreshes the actual tool reading before the adaptive deadline (maximum 300 seconds, shorter near thresholds or rapid drain). The worker never presents a re-read old file as a new measurement. If main cannot obtain fresh data, it retries validation once and latches SAVE_AND_STOP. Long uninterruptible calls remain a limit of host-tool refresh; this design does not claim unattended background access to the native tool.
+Main refreshes the actual tool reading before the adaptive deadline (maximum 300 seconds, shorter near thresholds or rapid drain). The worker never presents a re-read old file as a new measurement. If main cannot obtain fresh data, it retries validation once and latches SAVE_AND_STOP. A recorded `usage_receipt_expired` can then recover under the same already authorized active goal with `workflow resume` and `usage_recovery: true`; see [technical recovery](operations.md#expired-telemetry-recovery-under-existing-authority). Fresh data alone does not clear a latch, but this checked recovery does not require another user message. Real quota stops and explicit user stops retain their continuation requirements. Refresh at work boundaries with enough time for the next tool call; the deadline is not a recommended wait duration. Long uninterruptible calls remain a limit of host-tool refresh; this design does not claim unattended background access to the native tool.
 
 Malformed input, wrong run/epoch, future/expired observations, backwards timestamps and changed replays are refused. Identical receipt publication is an idempotent no-op. Timestamp/source claims remain caller-supplied evidence, as with other native receipts; JSON shape alone is not provider authentication. Store raw evidence privately and never treat an arbitrary source label as independent proof.
 

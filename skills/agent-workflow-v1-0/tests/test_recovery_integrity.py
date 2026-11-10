@@ -28,7 +28,9 @@ class RecoveryIntegrityTests(unittest.TestCase):
         # Production candidate.py stays unchanged and exposes no fault-control flags.
         candidate = self.package / 'scripts/candidate.py'
         original = candidate.read_text(encoding='utf-8')
-        needle = 'return w, w.Workflow(self.project, PACKAGE, state_base=self.base, role_catalog=catalog, provenance_guard=self.check_binding, run_id=self.args.run_id)'
+        needle = ('return w, w.Workflow(self.project, PACKAGE, state_base=self.base, role_catalog=catalog,\n'
+                  '                            provenance_guard=self.check_binding, run_id=self.args.run_id,\n'
+                  '                            usage_policy_provider=lambda: native_decision_policy(self))')
         injected = ("engine = w.Workflow(self.project, PACKAGE, lambda: 10000, state_base=self.base, role_catalog=catalog, provenance_guard=self.check_binding, run_id=self.args.run_id)\n"
                     f"        fault_root = Path({str(self.root)!r})\n"
                     "        require(PACKAGE.is_relative_to(fault_root), 'disposable fixture root required')\n"
@@ -43,7 +45,7 @@ class RecoveryIntegrityTests(unittest.TestCase):
                  for p in self.package.rglob('*') if p.is_file() and p.relative_to(self.package).parts[0] in payload_roots
                  and '__pycache__' not in p.parts and p.suffix != '.pyc'}
         self.manifest = self.package / 'manifest.json'
-        self.manifest.write_text(json.dumps(dict(schema_version=1, identity='agent-workflow-v1-0', version='1.0', files=files)), encoding='utf-8')
+        self.manifest.write_text(json.dumps(dict(schema_version=1, identity='agent-workflow-v1-0', version='1.1', files=files)), encoding='utf-8')
         self.pin = hashlib.sha256(self.manifest.read_bytes()).hexdigest()
         self.home = self.root / 'home'
         self.counter = 0
@@ -208,7 +210,7 @@ class RecoveryIntegrityTests(unittest.TestCase):
     def candidate_command(self, project, command):
         interpreter = getattr(sys, '_base_executable', sys.executable)
         return [interpreter, *(['-O'] if sys.flags.optimize else []), str(self.package / 'scripts/candidate.py'),
-                '--manifest', str(self.manifest), '--manifest-sha256', self.pin, '--version', '1.0',
+                '--manifest', str(self.manifest), '--manifest-sha256', self.pin, '--version', '1.1',
                 '--project', str(project), '--run-id', 'run-old', 'workflow', command]
 
     def worker_identity(self, child, command):

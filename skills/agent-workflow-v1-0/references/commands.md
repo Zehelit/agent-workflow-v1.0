@@ -2,7 +2,7 @@
 
 The stdlib helper validates commands passing through `Workflow.execute` and `Workflow.apply`. It does not intercept native tools, authenticate tool receipts or user messages, stop processes, or independently observe effective models. Main still performs those operations and supplies evidence. A26 authorization and checkpoint/ownership/capacity guards remain in force.
 
-State uses integer `schema_version: 2`. Unversioned, legacy, future and malformed state is rejected before mutation. There is no legacy migration/import utility. Start a new v1.0 run with current typed authorization. Checkpoint snapshot and restore remain supported; historical evidence never authorizes work. Fault-injection tests use disposable fixture copies only.
+State uses integer `schema_version: 2`. Unversioned, legacy, future and malformed state is rejected before mutation. There is no legacy migration/import utility. Start a new AGWF run with current typed authorization. Checkpoint snapshot and restore remain supported; historical evidence never authorizes work. Fault-injection tests use disposable fixture copies only.
 
 ## JSON and error policy
 
@@ -97,7 +97,7 @@ Malformed caller types/ranges are errors and leave state bytes unchanged: for ex
 
 ## Supported pinned entry
 
-All operations use `scripts/candidate.py --manifest <manifest> --manifest-sha256 <accepted-pin> --version 1.0`. Run modes additionally require `--project <absolute-project>` and `--run-id <fresh-run>`.
+All operations use `scripts/candidate.py --manifest <manifest> --manifest-sha256 <accepted-pin> --version 1.1`. Run modes additionally require `--project <absolute-project>` and `--run-id <fresh-run>`.
 
 | Mode | Input | Behavior |
 | --- | --- | --- |

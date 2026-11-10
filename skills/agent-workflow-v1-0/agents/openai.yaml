@@ -1,5 +1,5 @@
 interface:
-  display_name: "agent-workflow-v1.0"
+  display_name: "agent-workflow-v1.1"
   short_description: "Task-scoped specialists with usage-aware recovery"
 policy:
   allow_implicit_invocation: false

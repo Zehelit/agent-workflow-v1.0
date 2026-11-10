@@ -1,4 +1,4 @@
-"""Build deterministic agent-workflow-v1.0 payload and ZIP without installing."""
+"""Build deterministic agent-workflow-v1.1 payload and ZIP without installing."""
 import argparse
 import hashlib
 import json
@@ -34,7 +34,7 @@ def build(source, output):
     for path in files.values():
         if path.is_symlink() or not path.is_file() or path.stat().st_nlink != 1:
             raise ValueError('regular unlinked source required')
-    manifest = dict(schema_version=1, identity=IDENTITY, version='1.0', files={name: sha(path) for name, path in sorted(files.items())})
+    manifest = dict(schema_version=1, identity=IDENTITY, version='1.1', files={name: sha(path) for name, path in sorted(files.items())})
     output.mkdir(parents=True)
     package = output / IDENTITY
     package.mkdir()
@@ -54,7 +54,7 @@ def build(source, output):
                 info.create_system = 3
                 info.external_attr = 0o100644 << 16
                 zipped.writestr(info, path.read_bytes(), compresslevel=9)
-    receipt = dict(identity=IDENTITY, version='1.0', manifest_sha256=sha(package / 'manifest.json'), zip_sha256=sha(archive), files=len(files), activated=False)
+    receipt = dict(identity=IDENTITY, version='1.1', manifest_sha256=sha(package / 'manifest.json'), zip_sha256=sha(archive), files=len(files), activated=False)
     (output / 'build-receipt.json').write_bytes(encode(receipt))
     return receipt
 

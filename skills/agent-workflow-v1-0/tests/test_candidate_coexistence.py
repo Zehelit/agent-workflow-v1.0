@@ -70,7 +70,7 @@ class CandidateCoexistenceTests(unittest.TestCase):
             extractor.schema_validate({})
         self.assertEqual(str(failure.exception), 'schema_required')
 
-    def cli(self, *command, entry=None, run='candidate-run', manifest=None, pin=None, version='1.0', payload=None, raw=None, good=True, env_overrides=None):
+    def cli(self, *command, entry=None, run='candidate-run', manifest=None, pin=None, version='1.1', payload=None, raw=None, good=True, env_overrides=None):
         env = dict(os.environ, CODEX_HOME=str(self.home), PYTHONDONTWRITEBYTECODE='1')
         env.update(env_overrides or {})
         argv = [*PYTHON, str(entry or self.entry), '--manifest', str(manifest or self.manifest), '--manifest-sha256', pin or self.pin,
@@ -188,6 +188,149 @@ class CandidateCoexistenceTests(unittest.TestCase):
         self.assertEqual(json.loads((self.state()/'state.json').read_bytes())['status'],'complete')
         self.assertFalse(monitor.marker_state(base)['liveIdentity'])
         self.assertEqual(monitor.read_health(base)['exitReason'],'explicit_stop')
+
+    def expire_owned_test_watcher(self, run, entry):
+        """Expire a synthetic receipt in a disposable run; let its real worker stop."""
+        self.activate(run, entry)
+        monitor = load('candidate_expiry_fixture', self.package / 'private/limit-watcher/scripts/monitor.py')
+        base = self.state(run) / 'watcher'
+        receipt = json.loads((base / 'usage-source.json').read_bytes())
+        receipt['observedAt'] = time.time() - 301
+        monitor.write(base / 'usage-source.json', receipt)
+        deadline = time.monotonic() + 8
+        while time.monotonic() < deadline:
+            status = monitor.status(base)
+            if status['action'] == 'SAVE_AND_STOP' and not status['health']['liveIdentity']:
+                break
+            time.sleep(.05)
+        self.assertEqual(status['action'], 'SAVE_AND_STOP')
+        self.assertEqual(status['diagnosticCode'], 'usage_receipt_expired')
+        self.assertFalse(status['health']['liveIdentity'])
+        self.assertEqual(json.loads((self.state(run) / 'state.json').read_bytes())['status'], 'active')
+        return monitor, base
+
+    def check_expired_usage_recovery(self, batched):
+        for entry, mapping in ((self.source, 'source'), (self.entry, 'staged')):
+            run = mapping + ('-batch-expiry' if batched else '-direct-expiry')
+            with self.subTest(mapping=mapping, batched=batched):
+                monitor, base = self.expire_owned_test_watcher(run, entry)
+                binding = (self.state(run) / 'run-binding.json').read_bytes()
+                latch = (base / 'save-latch.json').read_bytes()
+                control = (base / 'control.json').read_bytes()
+                before = stable_state_hashes(self.state(run))
+                task = dict(id='forbidden_work', role='implementer', objective='must not start', criteria=['blocked'])
+                denied = self.cli('workflow', 'task', run=run, entry=entry, payload=task, good=False)
+                self.assertIn('integrated watcher unhealthy', denied.stderr)
+                mixed = self.project / (run + '-mixed.json')
+                mixed.write_text(json.dumps(dict(batch_id='mixed', steps=[
+                    dict(key='stop', command='stop', payload={}),
+                    dict(key='work', command='task', payload=task)])), encoding='utf-8')
+                self.cli('coordination', '--input', str(mixed), run=run, entry=entry, good=False)
+                self.assertEqual(stable_state_hashes(self.state(run)), before)
+
+                artifact = self.project / (run + '.txt')
+                artifact.write_text('recover this exact content', encoding='utf-8')
+                snapshot = dict(files=[artifact.name], writers_quiescent=True, next_action='wait for user continuation')
+                if batched:
+                    request = self.project / (run + '-recovery.json')
+                    request.write_text(json.dumps(dict(batch_id='recovery', steps=[
+                        dict(key='stop', command='stop', payload={}),
+                        dict(key='save', command='snapshot', payload=snapshot)])), encoding='utf-8')
+                    recovered = json.loads(self.cli('coordination', '--input', str(request), run=run, entry=entry).stdout)
+                    self.assertIsNone(recovered['blocker'])
+                else:
+                    stopped = json.loads(self.cli('workflow', 'stop', run=run, entry=entry).stdout)
+                    self.assertEqual(stopped['action'], 'SAVE_AND_STOP')
+                    self.assertEqual(json.loads((self.state(run) / 'state.json').read_bytes())['status'], 'stopping')
+                    saved = json.loads(self.cli('workflow', 'snapshot', run=run, entry=entry, payload=snapshot).stdout)
+                    self.assertTrue(saved['restore_verified'])
+
+                # Recovery cannot renew the lease, clear SAVE or silently rebind the run.
+                self.assertEqual((base / 'control.json').read_bytes(), control)
+                self.assertEqual((base / 'save-latch.json').read_bytes(), latch)
+                state = json.loads((self.state(run) / 'state.json').read_bytes())
+                checkpoint = self.state(run) / 'checkpoints' / state['checkpoint']['id']
+                self.assertEqual((checkpoint / 'files' / artifact.name).read_bytes(), artifact.read_bytes())
+                halted = json.loads(self.cli('workflow', 'halt', run=run, entry=entry, payload=dict(
+                    inventory=[], observed_at=time.time(), owned_processes_stopped=True,
+                    stop_evidence='Disposable expired-receipt worker observed exited; no agents dispatched.')).stdout)
+                self.assertEqual(halted['status'], 'halted')
+                self.assertTrue(halted['recovery_verified'])
+                self.assertEqual((self.state(run) / 'run-binding.json').read_bytes(), binding)
+                self.assertEqual((base / 'save-latch.json').read_bytes(), latch)
+                self.assertFalse(monitor.marker_state(base)['liveIdentity'])
+                self.assertFalse(monitor.load_control(base)['active'])
+                self.cli('workflow', 'task', run=run, entry=entry, payload=task, good=False)
+                self.cli('workflow', 'resume', run=run, entry=entry, payload={}, good=False)
+                self.assertEqual(json.loads((self.state(run) / 'state.json').read_bytes())['status'], 'halted')
+
+    def test_expired_usage_allows_direct_stop_snapshot_halt(self):
+        self.check_expired_usage_recovery(batched=False)
+
+    def test_expired_usage_allows_batched_stop_snapshot_then_direct_halt(self):
+        self.check_expired_usage_recovery(batched=True)
+
+    def test_expired_usage_recovers_same_active_goal_without_another_user_message(self):
+        monitor, base = self.expire_owned_test_watcher('recover-expiry', self.entry)
+        self.cli('workflow', 'stop', run='recover-expiry')
+        self.cli('workflow', 'snapshot', run='recover-expiry', payload=dict(
+            files=[], writers_quiescent=True, next_action='continue authorized goal'))
+        self.cli('workflow', 'halt', run='recover-expiry', payload=dict(
+            inventory=[], observed_at=time.time(), owned_processes_stopped=True,
+            stop_evidence='disposable watcher observed stopped'))
+        state_path = self.state('recover-expiry') / 'state.json'
+        halted = json.loads(state_path.read_bytes())
+        self.assertEqual(halted['usage_failure']['diagnostic_code'], 'usage_receipt_expired')
+        old_latch = (base / 'save-latch.json').read_bytes()
+        old_epoch = monitor.load_control(base)['epoch']
+        now = time.time()
+        rate = dict(primary=dict(usedPercent=10, windowDurationMins=300, resetsAt=9999999999),
+                    secondary=dict(usedPercent=10, windowDurationMins=10080, resetsAt=9999999999))
+        self.cli('workflow', 'usage', run='recover-expiry', payload=dict(observed_at=now, rateLimits=rate))
+        self.cli('workflow', 'inventory', run='recover-expiry', payload=dict(inventory=[], observed_at=now))
+        receipt = self.project / 'recovery-usage.json'
+        receipt.write_text(json.dumps(dict(source=monitor.USAGE_SOURCE, sourceId='fresh-real-tool-fixture',
+            observedAt=now, result=dict(rateLimits=rate))), encoding='utf-8')
+        observation = dict(goal_id='test-goal', thread_id='test-thread', status='active',
+                           source_kind='get_goal', source_id='still-active-goal', observed_at=now)
+        invalid = self.project / 'invalid-recovery-usage.json'
+        invalid.write_text('{invalid', encoding='utf-8')
+        old_control = (base / 'control.json').read_bytes()
+        self.cli('workflow', 'resume', '--usage-input', str(invalid), run='recover-expiry',
+                 payload=dict(usage_recovery=True, app_goal_observation=observation), good=False)
+        self.assertEqual((base / 'control.json').read_bytes(), old_control)
+        self.assertEqual(json.loads(state_path.read_bytes())['status'], 'halted')
+        result = json.loads(self.cli('workflow', 'resume', '--usage-input', str(receipt),
+            run='recover-expiry', payload=dict(usage_recovery=True, app_goal_observation=observation)).stdout)
+        self.assertEqual(result['basis'], 'usage_recovery')
+        self.assertTrue(result['watcher']['healthy'])
+        self.assertNotEqual(monitor.load_control(base)['epoch'], old_epoch)
+        self.assertEqual((base / 'save-latch.json').read_bytes(), old_latch)
+        self.assertEqual(len(json.loads(state_path.read_bytes())['authorization_events']), 1)
+        self.cli('workflow', 'task', run='recover-expiry', payload=dict(
+            id='continued', role='implementer', objective='authorized work', criteria=['done']))
+
+    def test_expiry_after_stop_cannot_prevent_halt_or_relabel_ordinary_stop(self):
+        self.activate()
+        self.cli('workflow', 'stop')
+        monitor = load('candidate_late_expiry', self.package / 'private/limit-watcher/scripts/monitor.py')
+        base = self.state() / 'watcher'
+        receipt = json.loads((base / 'usage-source.json').read_bytes())
+        receipt['observedAt'] = time.time() - 301
+        monitor.write(base / 'usage-source.json', receipt)
+        deadline = time.monotonic() + 8
+        while time.monotonic() < deadline:
+            sample = monitor.status(base)
+            if sample['action'] == 'SAVE_AND_STOP' and not sample['health']['liveIdentity']:
+                break
+            time.sleep(.05)
+        self.assertEqual(sample['diagnosticCode'], 'usage_receipt_expired')
+        self.cli('workflow', 'snapshot', payload=dict(files=[], writers_quiescent=True, next_action='stopped'))
+        self.cli('workflow', 'halt', payload=dict(inventory=[], observed_at=time.time(),
+            owned_processes_stopped=True, stop_evidence='late-expiry worker exited'))
+        state = json.loads((self.state() / 'state.json').read_bytes())
+        self.assertEqual(state['status'], 'halted')
+        self.assertNotIn('usage_failure', state)
 
     def test_missing_usage_refuses_activation_without_active_state(self):
         run='missing-usage'
@@ -391,7 +534,11 @@ class CandidateCoexistenceTests(unittest.TestCase):
             self.cli('watcher','renew')
             # Wrong-run marker/control cannot be changed even if copied to another run namespace.
             self.cli('workflow','validate',run='other-run')
-            other=self.state('other-run')/'watcher';shutil.copytree(base,other)
+            other=self.state('other-run')/'watcher';other.mkdir()
+            # Copy the ownership contract, not heartbeat transaction files that
+            # the live worker can replace/delete while copytree enumerates them.
+            for name in ('control.json', 'running.json', 'ownership.json'):
+                shutil.copyfile(base/name, other/name)
             before=hashes(other)
             self.cli('watcher','renew',run='other-run',good=False)
             self.cli('watcher','stop',run='other-run',good=False)
@@ -406,22 +553,42 @@ class CandidateCoexistenceTests(unittest.TestCase):
                 monitor.publish_usage(base, control, {'source': monitor.USAGE_SOURCE,
                     'sourceId': 'trigger-integrity-check', 'observedAt': time.time(),
                     'result': {'rateLimits': {'primary': windows[300], 'secondary': windows[10080]}}})
+                expected_exit='worker_error'
                 deadline=time.monotonic()+5
-                while time.monotonic()<deadline and monitor.marker_state(base)['liveIdentity']:
+                terminal_health = None
+                while time.monotonic()<deadline:
+                    try:
+                        worker = monitor.marker_state(base)
+                        health = monitor.read_health(base)
+                        if worker['identityState'] not in {'matched', 'unknown'} and health['exitReason'] == expected_exit:
+                            terminal_health = health
+                            break
+                    except PermissionError:
+                        pass  # A sharing hold is not evidence that the worker exited.
                     time.sleep(.05)
                 self.assertFalse(monitor.marker_state(base)['liveIdentity'])
-                self.assertEqual(monitor.read_health(base)['exitReason'],'worker_error')
-                expected_exit='worker_error'
+                self.assertIsNotNone(terminal_health, 'verified corruption exit receipt required')
         finally:
             if changed_helper:
                 changed_helper[0].write_bytes(changed_helper[1])
             if started:
                 self.cli('watcher','stop')
                 deadline=time.monotonic()+5
-                while time.monotonic()<deadline and monitor.marker_state(base)['liveIdentity']:
+                terminal_health = None
+                while time.monotonic()<deadline:
+                    try:
+                        health = monitor.read_health(base)
+                        if not monitor.marker_state(base)['liveIdentity'] and health['exitReason'] == expected_exit:
+                            terminal_health = health
+                            break
+                    except PermissionError:
+                        # Windows may briefly deny the final atomic health publication.
+                        # Marker removal alone does not mean that publication has finished.
+                        pass
                     time.sleep(.05)
                 self.assertFalse(monitor.marker_state(base)['liveIdentity'])
-                self.assertEqual(monitor.read_health(base)['exitReason'],expected_exit)
+                self.assertIsNotNone(terminal_health, 'worker terminal health was not published before the deadline')
+                self.assertEqual(terminal_health['exitReason'],expected_exit)
 
 if __name__=='__main__':
     unittest.main(verbosity=2)

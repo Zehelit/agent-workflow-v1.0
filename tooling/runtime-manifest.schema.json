@@ -1,0 +1,246 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:agent-workflow:runtime-manifest:v1",
+  "title": "Portable runtime observations and readiness gaps, version 1",
+  "description": "Host paths are observations, not portable configuration requirements. Caller-saved native receipts never authenticate native readiness.",
+  "type": "object",
+  "required": ["schemaVersion", "schema", "scope", "status", "nativeReadinessVerified"],
+  "properties": {
+    "schemaVersion": {"const": 1},
+    "schema": {"const": "agent-workflow.runtime-manifest/v1"},
+    "scope": {"const": "portable-readiness"},
+    "provider": {"const": "local-stdlib-python"},
+    "projectRoot": {"type": "string", "minLength": 1},
+    "observedAt": {"type": "number"},
+    "endedAt": {"type": "number"},
+    "status": {"enum": ["FAIL", "GAP"]},
+    "nativeReadinessVerified": {"const": false},
+    "error": {"type": "string"},
+    "selection": {
+      "type": "object",
+      "required": ["rule", "selectedInterpreter", "createsEnvironment", "managedBaseMutation"],
+      "properties": {
+        "rule": {"type": "string"},
+        "selectedInterpreter": {"type": "string"},
+        "createsEnvironment": {"const": false},
+        "managedBaseMutation": {"const": false}
+      },
+      "additionalProperties": false
+    },
+    "interpreter": {"$ref": "#/$defs/pythonObservation"},
+    "shells": {
+      "type": "array", "minItems": 2, "maxItems": 2,
+      "items": {
+        "type": "object",
+        "required": ["scope", "provider", "path", "aliasEvidence", "shellDiscovery", "tools"],
+        "properties": {
+          "scope": {"enum": ["bare-shell-path", "configured-shell-path"]},
+          "provider": {"const": "local-subprocess"},
+          "path": {"type": "string"},
+          "aliasEvidence": {"type": "string"},
+          "shellDiscovery": {
+            "type": "object", "required": ["scope", "status"],
+            "properties": {
+              "scope": {"const": "clean-child-shell-discovery"}, "status": {"$ref": "#/$defs/checkStatus"},
+              "reason": {"type": "string"}, "argv": {"type": "array", "items": {"type": "string"}},
+              "stdout": {"type": "string"}, "stderr": {"type": "string"}, "exitCode": {"type": "integer"},
+              "callerInteractiveAliasesObserved": {"const": false},
+              "discovery": {
+                "type": "object", "required": ["path", "commands"],
+                "properties": {"path": {"type": "string"}, "commands": {"type": "array", "items": {"type": "object"}}},
+                "additionalProperties": false
+              }
+            },
+            "additionalProperties": false
+          },
+          "tools": {
+            "type": "array", "minItems": 9, "maxItems": 9,
+            "items": {
+              "type": "object", "required": ["name", "launcher", "status"],
+              "properties": {
+                "name": {"enum": ["python", "python3", "pip", "node", "npm", "npx", "uv", "uvx", "git"]},
+                "launcher": {"type": ["string", "null"]},
+                "status": {"$ref": "#/$defs/checkStatus"},
+                "file": {"$ref": "#/$defs/fileIdentity"},
+                "reason": {"type": "string"},
+                "versionOutput": {"type": "string"},
+                "sameEngineAsSelected": {"type": "boolean"},
+                "observation": {"$ref": "#/$defs/pythonObservation"}
+              },
+              "additionalProperties": false
+            }
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "configuration": {
+      "type": "object", "required": ["scope", "status"],
+      "properties": {
+        "scope": {"const": "configuration-only"},
+        "status": {"$ref": "#/$defs/checkStatus"},
+        "provider": {"const": "invisible-playwright-mcp"},
+        "command": {"$ref": "#/$defs/fileIdentity"},
+        "basePython": {"$ref": "#/$defs/fileIdentity"},
+        "baseObservation": {"$ref": "#/$defs/pythonObservation"},
+        "arguments": {"type": "array", "items": {"type": "string"}},
+        "uploadRoot": {"type": "string"},
+        "nativeVisibilityVerified": {"const": false},
+        "reason": {"type": "string"},
+        "failedCheckId": {"type": "string"}
+      },
+      "additionalProperties": false
+    },
+    "engine": {
+      "type": "object", "required": ["scope", "provider", "status", "reason"],
+      "properties": {
+        "scope": {"const": "browser-engine-file-only"},
+        "provider": {"const": "invisible-playwright-mcp"},
+        "status": {"const": "GAP"},
+        "reason": {"type": "string"},
+        "requestedPath": {"type": "string"},
+        "file": {"$ref": "#/$defs/fileIdentity"}
+      },
+      "additionalProperties": false
+    },
+    "checks": {
+      "type": "array", "items": {
+        "type": "object", "required": ["name", "status", "impact"],
+        "properties": {"name": {"type": "string"}, "status": {"$ref": "#/$defs/checkStatus"}, "impact": {"enum": ["required", "diagnostic"]}, "reason": {"type": "string"}},
+        "additionalProperties": false
+      }
+    },
+    "nativeScopes": {
+      "type": "array", "minItems": 5, "maxItems": 5,
+      "items": {
+        "type": "object", "required": ["scope", "provider", "status", "reason"],
+        "properties": {
+          "scope": {"$ref": "#/$defs/nativeScope"}, "provider": {"const": "invisible-playwright-mcp"},
+          "status": {"const": "GAP"}, "reason": {"type": "string"}
+        },
+        "additionalProperties": false
+      }
+    },
+    "nativeReceipts": {
+      "type": "array", "items": {
+        "type": "object", "required": ["path", "status"],
+        "properties": {
+          "path": {"type": "string"}, "status": {"enum": ["FAIL", "ATTACHED_UNAUTHENTICATED"]},
+          "reason": {"type": "string"}, "failedCheckId": {"type": "string"},
+          "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+          "scope": {"$ref": "#/$defs/nativeScope"}, "provider": {"const": "invisible-playwright-mcp"},
+          "observedAt": {"type": "number"}, "ageSeconds": {"type": "number", "minimum": 0},
+          "provenance": {"$ref": "#/$defs/nativeProvenance"},
+          "observationCount": {"type": "integer", "minimum": 1, "maximum": 128},
+          "artifacts": {"type": "array", "maxItems": 128, "items": {"$ref": "#/$defs/nativeArtifact"}},
+          "evidenceDisposition": {"const": "REFUSED_MISSING_DOWNLOADED_ARTIFACT"},
+          "providerAuthenticated": {"const": false}, "nativeReadinessVerified": {"const": false},
+          "trust": {"type": "string"}
+        },
+        "additionalProperties": false
+      }
+    },
+    "stdio": {
+      "type": "object", "required": ["scope", "status"],
+      "properties": {
+        "scope": {"const": "cli-stdio-synthetic"}, "status": {"$ref": "#/$defs/checkStatus"},
+        "provider": {"const": "caller-selected-synthetic-script"},
+        "script": {"$ref": "#/$defs/fileIdentity"}, "pid": {"type": "integer"},
+        "events": {"type": "array"}, "toolNames": {"type": "array", "items": {"type": "string"}},
+        "stderr": {"type": "string"}, "reason": {"type": "string"}, "cleanupError": {"type": "string"},
+        "failedCheckId": {"type": "string"}, "nativeReadinessVerified": {"const": false},
+        "descendantContainmentVerified": {"const": false},
+        "cleanup": {
+          "type": "object", "required": ["pid", "exitCode", "stopped", "action", "scope", "pipeReadersStopped"],
+          "properties": {
+            "pid": {"type": "integer"}, "exitCode": {"type": ["integer", "null"]},
+            "stopped": {"type": "boolean"}, "action": {"type": "string"},
+            "scope": {"const": "owned-immediate-child-only"}, "pipeReadersStopped": {"type": "boolean"}
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "allOf": [{"if": {"not": {"required": ["error"]}}, "then": {"required": ["projectRoot", "provider", "observedAt", "endedAt", "selection", "interpreter", "shells", "configuration", "engine", "checks", "nativeScopes", "nativeReceipts"]}}],
+  "additionalProperties": false,
+  "$defs": {
+    "nativeArtifact": {
+      "type": "object", "required": ["resolvedPath", "size", "sha256"],
+      "properties": {
+        "resolvedPath": {"type": "string"},
+        "size": {"type": "integer", "minimum": 1},
+        "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+      },
+      "additionalProperties": false,
+      "description": "Caller-saved local bytes measured by preflight; provider origin is not authenticated."
+    },
+    "nativeProvenance": {
+      "type": "object", "required": ["schemaVersion", "observer", "method", "sessionId"],
+      "properties": {
+        "schemaVersion": {"const": 1},
+        "observer": {"type": "string", "minLength": 1, "maxLength": 256, "pattern": "\\S"},
+        "method": {"type": "string", "minLength": 1, "maxLength": 128, "pattern": "\\S"},
+        "sessionId": {"type": "string", "minLength": 1, "maxLength": 256, "pattern": "\\S"}
+      },
+      "additionalProperties": false
+    },
+    "nativeObservation": {
+      "type": "object", "required": ["schemaVersion", "toolName", "outcome", "summary"],
+      "properties": {
+        "schemaVersion": {"const": 1},
+        "toolName": {"type": "string", "minLength": 1, "maxLength": 128, "pattern": "\\S"},
+        "outcome": {"enum": ["PASS", "FAIL", "GAP"]},
+        "summary": {"type": "string", "minLength": 1, "maxLength": 2048, "pattern": "\\S"},
+        "claim": {"type": "string", "minLength": 1, "maxLength": 256, "pattern": "\\S"},
+        "providerAuthenticated": {"type": "boolean"}
+      },
+      "additionalProperties": false,
+      "description": "Caller claims are bounded metadata and never authenticate native readiness."
+    },
+    "nativeReceiptInput": {
+      "type": "object",
+      "required": ["schemaVersion", "projectRoot", "provider", "scope", "observedAt", "provenance", "files", "observations"],
+      "properties": {
+        "schemaVersion": {"const": 1},
+        "projectRoot": {"type": "string", "minLength": 1, "maxLength": 32768, "pattern": "\\S"},
+        "provider": {"const": "invisible-playwright-mcp"},
+        "scope": {"$ref": "#/$defs/nativeScope"},
+        "observedAt": {"type": "number"},
+        "provenance": {"$ref": "#/$defs/nativeProvenance"},
+        "files": {"type": "array", "maxItems": 128, "items": {"type": "string", "minLength": 1, "maxLength": 32768, "pattern": "\\S"}},
+        "observations": {"type": "array", "minItems": 1, "maxItems": 128, "items": {"$ref": "#/$defs/nativeObservation"}}
+      },
+      "allOf": [{"if": {"properties": {"scope": {"const": "native-browser-download"}}}, "then": {"properties": {"files": {"minItems": 1}}}}],
+      "description": "At most 1 MiB strict JSON bytes; duplicate keys and nonfinite numbers forbidden at every depth. Paths/pins/freshness are checked separately. Download files must identify caller-saved artifacts; all attachments remain unauthenticated."
+    },
+    "checkStatus": {"enum": ["PASS", "FAIL", "GAP"]},
+    "nativeScope": {"enum": ["native-tool-catalog", "native-browser-page", "native-browser-file", "native-browser-download", "native-browser-close"]},
+    "fileIdentity": {
+      "type": "object", "required": ["resolvedPath", "device", "inode", "sha256"],
+      "properties": {
+        "resolvedPath": {"type": "string"}, "device": {"type": "integer"}, "inode": {"type": "integer"},
+        "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+      },
+      "additionalProperties": false
+    },
+    "pythonObservation": {
+      "type": "object", "required": ["status"],
+      "properties": {
+        "status": {"$ref": "#/$defs/checkStatus"}, "argv": {"type": "array", "items": {"type": "string"}},
+        "exitCode": {"type": "integer"}, "stdout": {"type": "string"}, "stderr": {"type": "string"}, "reason": {"type": "string"},
+        "engine": {
+          "type": "object", "required": ["executable", "baseExecutable", "prefix", "basePrefix", "version", "file", "baseFile"],
+          "properties": {
+            "executable": {"type": "string"}, "baseExecutable": {"type": "string"}, "prefix": {"type": "string"}, "basePrefix": {"type": "string"},
+            "version": {"type": "array", "minItems": 3, "maxItems": 3, "items": {"type": "integer"}},
+            "file": {"$ref": "#/$defs/fileIdentity"}, "baseFile": {"$ref": "#/$defs/fileIdentity"}
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

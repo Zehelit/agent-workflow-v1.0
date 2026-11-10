@@ -17,7 +17,7 @@ import time
 
 PACKAGE = Path(__file__).resolve().parents[1]
 IDENTITY = 'agent-workflow-v1-0'
-VERSION = '1.0'
+VERSION = '1.1'
 
 class CandidateError(ValueError):
     pass
@@ -79,7 +79,7 @@ class Runtime:
         require(required <= set(self.paths), 'manifest omits required runtime dependency')
         self.verify_files()
         profile = read(self.paths['candidate-profile.json'])
-        require(profile == dict(schema_version=1, version=VERSION, identity=IDENTITY, display_name='agent-workflow-v1.0', allow_implicit_invocation=False, namespace='.agent-workflow-v1-0'), 'candidate profile mismatch')
+        require(profile == dict(schema_version=1, version=VERSION, identity=IDENTITY, display_name='agent-workflow-v1.1', allow_implicit_invocation=False, namespace='.agent-workflow-v1-0'), 'candidate profile mismatch')
         watcher_role=read(self.paths['private/limit-watcher/role.json'])['roles']['limit_watcher']
         require(watcher_role['role_file'] == 'limit_watcher.md', 'watcher instruction must be pinned private resource')
         self.core=load_module('workflow', self.paths['scripts/workflow.py'])
@@ -153,7 +153,9 @@ class Runtime:
         w = self.core
         sys.modules['workflow'] = w
         catalog = self.catalog
-        return w, w.Workflow(self.project, PACKAGE, state_base=self.base, role_catalog=catalog, provenance_guard=self.check_binding, run_id=self.args.run_id)
+        return w, w.Workflow(self.project, PACKAGE, state_base=self.base, role_catalog=catalog,
+                            provenance_guard=self.check_binding, run_id=self.args.run_id,
+                            usage_policy_provider=lambda: native_decision_policy(self))
 
     def worker_prefix(self):
         return [sys.executable, '-X', 'utf8', '-B', str(self.paths['scripts/candidate.py']),
@@ -259,10 +261,15 @@ def watcher_command(runtime, command, *options):
     return result
 
 
-def watcher_ready(runtime, command, payload, usage_input=None):
-    options = ()
+def watcher_ready(runtime, command, payload, usage_input=None, startup_options=()):
+    expected_at = runtime.core.read_json(Path(usage_input))['observedAt'] if usage_input else None
+    options = startup_options
     if command == 'resume':
-        if payload.get('native_ui_resume') is True:
+        if payload.get('usage_recovery') is True:
+            observation = payload['app_goal_observation']
+            options = ('--new-epoch', '--usage-recovery-at', str(observation['observed_at']),
+                       '--usage-recovery-receipt', observation['source_id'])
+        elif payload.get('native_ui_resume') is True:
             observation = payload['app_goal_observation']
             options = ('--new-epoch', '--native-transition-at', str(observation['updated_at']),
                        '--native-receipt', observation['source_id'])
@@ -275,7 +282,7 @@ def watcher_ready(runtime, command, payload, usage_input=None):
     while True:
         sample = watcher_command(runtime, 'status')
         require(sample.get('action') != 'SAVE_AND_STOP', 'integrated watcher requested SAVE_AND_STOP')
-        if sample.get('health', {}).get('healthy'):
+        if sample.get('health', {}).get('healthy') and (expected_at is None or sample.get('at') == expected_at):
             return sample
         require(sample.get('health', {}).get('liveIdentity') is True,
                 'integrated watcher exited before a healthy sample')
@@ -298,7 +305,7 @@ def watcher_stop_verified(runtime):
         time.sleep(0.2)
 
 
-RECOVERY_COMMANDS = {'status', 'usage', 'usage-due', 'snapshot', 'halt', 'complete',
+RECOVERY_COMMANDS = {'status', 'usage', 'usage-due', 'stop', 'snapshot', 'halt', 'complete',
                      'inventory', 'observe-authorization', 'app-goal', 'restore', 'compact'}
 ACTIVATION_COMMANDS = {'activate', 'bind-active-goal', 'resume'}
 TERMINAL_COMMANDS = {'halt', 'complete'}
@@ -327,11 +334,217 @@ def renew_for_work(runtime, command):
 
 
 def watcher_summary(sample):
+    at, due, interval = sample.get('at'), sample.get('next_check_at'), sample.get('check_interval_seconds')
+    valid = all(type(value) in (int, float) for value in (at, due, interval))
+    if valid and sample.get('policy', {}).get('exceptionActive'):
+        due = min(due, sample['policy']['exception']['validUntil'])
     return {'action': sample.get('action'), 'remaining': sample.get('remaining'),
             'healthy': sample.get('health', {}).get('healthy', False),
             'exitReason': sample.get('health', {}).get('exitReason'),
             'errorType': sample.get('health', {}).get('errorType'),
-            'diagnosticCode': sample.get('diagnosticCode')}
+            'diagnosticCode': sample.get('diagnosticCode'),
+            'sample_at': at, 'next_check_at': due, 'check_interval_seconds': interval,
+            'refresh_by': refresh_by(at, max(0, due-at)) if valid else None}
+
+
+def refresh_by(observed_at, interval):
+    return observed_at + interval - min(15, interval / 4)
+
+
+def native_decision_policy(runtime):
+    """Read the pinned watcher's real bounded exception, never a request override."""
+    path = runtime.base / 'watcher/control.json'
+    if not path.exists():
+        return None
+    runtime.check_binding()
+    monitor = load_module('candidate_policy', runtime.paths['private/limit-watcher/scripts/monitor.py'])
+    control = monitor.load_control(runtime.base / 'watcher')
+    require(control['runId'] == runtime.args.run_id, 'usage policy ownership mismatch')
+    card = monitor.policy_card(control, time.time())
+    if not card['exceptionActive']:
+        return None
+    exception = card['exception']
+    return dict(run_id=control['runId'], epoch=control['epoch'], decision_windows=card['decisionWindows'],
+                exact_quote=exception['userQuote'], valid_from=exception['validFrom'], valid_until=exception['validUntil'])
+
+
+def telemetry_failure(runtime):
+    """Capture the actual pinned watcher result; caller input cannot name the stop cause."""
+    sample = watcher_command(runtime, 'status')
+    if (sample.get('action') == 'SAVE_AND_STOP'
+            and sample.get('exitReason') == 'measurement_failure'
+            and sample.get('diagnosticCode') == 'usage_receipt_expired'):
+        control = read(runtime.base / 'watcher/control.json')
+        require(sample.get('policy', {}).get('epoch') == control['epoch']
+                and sample.get('policy', {}).get('runId') == runtime.args.run_id,
+                'telemetry failure ownership mismatch')
+        return dict(at=sample['at'], run_id=runtime.args.run_id, epoch=control['epoch'],
+                    diagnostic_code='usage_receipt_expired', exit_reason='measurement_failure')
+    return None
+
+
+def restore_failed_telemetry_start(runtime, engine, before):
+    # A malformed receipt/failed startup must not consume the recovery basis.
+    # A new SAVE (especially a real quota observation) always takes precedence.
+    if before is None or read(engine.path).get('status') != 'halted':
+        return
+    latch = runtime.base / 'watcher/save-latch.json'
+    current_latch = read(latch) if latch.exists() else None
+    if current_latch != before['latch']:
+        return
+    current = read(runtime.base / 'watcher/control.json')
+    require(current['runId'] == before['control']['runId'], 'failed recovery run ownership changed')
+    runtime.check_binding()
+    monitor = load_module('candidate_monitor_rollback', runtime.paths['private/limit-watcher/scripts/monitor.py'])
+    require(monitor.marker_state(runtime.base / 'watcher')['identityState'] not in ('matched', 'unknown'),
+            'cannot restore recovery control while worker is live or unknown')
+    monitor.write(runtime.base / 'watcher/control.json', before['control'])
+
+
+@contextlib.contextmanager
+def lifecycle_lock(runtime):
+    """One host writer across worker launch, workflow commit and rollback."""
+    path = runtime.base / 'lifecycle.lock'
+    owner = dict(pid=os.getpid(), run_id=runtime.args.run_id)
+    try:
+        fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+    except FileExistsError:
+        raise CandidateError('lifecycle operation already owned; inspect owner before recovery')
+    try:
+        os.write(fd, encoded(owner))
+        yield
+    finally:
+        os.close(fd)
+        if path.exists() and read(path) == owner:
+            path.unlink()
+
+
+def activation_identity(command, payload):
+    basis = payload.get('native_binding', payload.get('authorization'))
+    require(type(basis) is dict, 'activation basis required')
+    stable = {key:value for key,value in basis.items() if key not in {'observed_at', 'observed_turn_id'}}
+    return dict(command=command, objective=payload['objective'], basis=stable)
+
+
+def state_fingerprint(engine):
+    return sha(engine.path) if engine.path.exists() else None
+
+
+def record_activation_attempt(runtime, record):
+    path = runtime.base / 'activation-attempt.json'
+    runtime.core.write_json(path, record)
+    return sha(path)
+
+
+def startup_retry_options(runtime, engine, command, payload, pin=None):
+    path = runtime.base / 'activation-attempt.json'
+    if not path.exists():
+        require(pin is None, 'startup pin has no recorded attempt')
+        return ()
+    require(type(pin) is str and re.fullmatch('[a-f0-9]{64}', pin) and sha(path) == pin,
+            'startup retry requires unchanged externally preserved attempt SHA-256')
+    prior = read(path)
+    fields = {'schema_version', 'command', 'identity', 'pre_state_sha256', 'binding_sha256', 'phase', 'failure', 'updated_at'}
+    require(set(prior) == fields and prior['schema_version'] == 1 and prior['phase'] == 'failed',
+            'startup attempt is unfinished or already committed; reconcile before retry')
+    require(prior['command'] == command and prior['identity'] == activation_identity(command, payload)
+            and prior['pre_state_sha256'] == state_fingerprint(engine)
+            and prior['binding_sha256'] == hashlib.sha256(encoded(runtime.binding)).hexdigest(),
+            'startup retry identity, prior state or package binding changed')
+    sample = watcher_command(runtime, 'status')
+    if sample.get('action') != 'SAVE_AND_STOP':
+        require(prior['failure'] is None, 'recorded SAVE no longer matches startup state')
+        return ()
+    failure = telemetry_failure(runtime)
+    require(failure is not None and failure == prior['failure'],
+            'only recorded expired telemetry permits startup retry')
+    require(sample.get('health', {}).get('identityState') not in {'matched', 'unknown'},
+            'startup retry worker must be confirmed absent')
+    observation = payload['app_goal_observation']
+    require(observation['status'] == 'active' and observation['observed_at'] > failure['at'],
+            'fresh post-failure active goal required')
+    return ('--new-epoch', '--usage-recovery-at', str(observation['observed_at']),
+            '--usage-recovery-receipt', observation['source_id'])
+
+
+def watcher_control_snapshot(runtime):
+    control = runtime.base / 'watcher/control.json'
+    latch = runtime.base / 'watcher/save-latch.json'
+    return dict(control=read(control), latch=read(latch) if latch.exists() else None) if control.exists() else None
+
+
+def restore_failed_initial_start(runtime, engine, before, pre_state):
+    if before is None or state_fingerprint(engine) != pre_state:
+        return
+    latch = runtime.base / 'watcher/save-latch.json'
+    if (read(latch) if latch.exists() else None) != before['latch']:
+        return  # Never roll back a newer SAVE, including a real quota stop.
+    current = read(runtime.base / 'watcher/control.json')
+    require(current['runId'] == before['control']['runId'], 'startup rollback ownership changed')
+    monitor = load_module('candidate_initial_rollback', runtime.paths['private/limit-watcher/scripts/monitor.py'])
+    require(monitor.marker_state(runtime.base / 'watcher')['identityState'] not in {'matched', 'unknown'},
+            'startup rollback requires verified worker exit')
+    runtime.check_binding()
+    monitor.write(runtime.base / 'watcher/control.json', before['control'])
+
+
+def execute_workflow_command(runtime, w, engine, command, payload, usage_input=None, startup_pin=None):
+    guarded = command in ACTIVATION_COMMANDS | TERMINAL_COMMANDS | {'stop', 'observe-authorization', 'app-goal'}
+    with lifecycle_lock(runtime) if guarded else contextlib.nullcontext():
+        if command == 'halt':
+            require('usage_failure' not in payload, 'watcher stop cause is supplied by candidate only')
+            failure = telemetry_failure(runtime)
+            current = read(engine.path)
+            if failure is not None and failure['at'] <= current.get('stopped_at', -1):
+                payload['usage_failure'] = failure
+        if command not in ACTIVATION_COMMANDS:
+            require(startup_pin is None, 'startup attempt pin only applies to initial activation')
+            if usage_input:
+                watcher_command(runtime, 'ingest', '--usage-input', usage_input)
+            sample = renew_for_work(runtime, command) if active_state(engine) else None
+            result = engine.execute(command, payload)
+            if command in TERMINAL_COMMANDS and result.get('status') in {'halted', 'complete'}:
+                sample = watcher_stop_verified(runtime)
+            if sample is not None and command in {'status', 'complete', 'halt'}:
+                result['watcher'] = watcher_summary(sample)
+            return result
+        preflight_activation(w, engine, command, payload)
+        initial = command in {'activate', 'bind-active-goal'}
+        pre_state = state_fingerprint(engine)
+        options = startup_retry_options(runtime, engine, command, payload, startup_pin) if initial else ()
+        require(initial or startup_pin is None, 'startup pin cannot replace resume authority')
+        before = watcher_control_snapshot(runtime)
+        record = None
+        if initial:
+            record = dict(schema_version=1, command=command, identity=activation_identity(command, payload),
+                          pre_state_sha256=pre_state, binding_sha256=hashlib.sha256(encoded(runtime.binding)).hexdigest(),
+                          phase='prepared', failure=None, updated_at=time.time())
+            record_activation_attempt(runtime, record)
+        if command == 'resume' and payload.get('usage_recovery') is True:
+            current = read(engine.path)
+            require(current.get('usage_failure') is not None and current['usage_failure'] == telemetry_failure(runtime),
+                    'recorded and current expired telemetry must match')
+        try:
+            sample = watcher_ready(runtime, command, payload, usage_input, startup_options=options)
+            result = engine.execute(command, payload)
+            sample = watcher_command(runtime, 'status')
+            require(sample.get('health', {}).get('healthy') is True,
+                    'integrated watcher lost health at activation commit; reconcile recorded workflow state')
+            if record is not None:
+                record.update(phase='committed', updated_at=time.time())
+                record_activation_attempt(runtime, record)
+            result['watcher'] = watcher_summary(sample)
+            return result
+        except BaseException as error:
+            watcher_stop_verified(runtime)
+            if initial:
+                restore_failed_initial_start(runtime, engine, before, pre_state)
+                record.update(phase='failed', failure=telemetry_failure(runtime), updated_at=time.time())
+                pin = record_activation_attempt(runtime, record)
+                error.startup_retry = dict(attempt_sha256=pin, command=command)
+            elif payload.get('usage_recovery') is True:
+                restore_failed_telemetry_start(runtime, engine, before)
+            raise
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
@@ -344,6 +557,7 @@ def main(argv=None):
     workflow = sub.add_parser('workflow')
     workflow.add_argument('command')
     workflow.add_argument('--input')
+    workflow.add_argument('--startup-attempt-sha256', help='Externally retained failure receipt pin for safe initial activation retry')
     workflow.add_argument('--usage-input', help='Fresh receipt from the existing Codex usage tool')
     coordination = sub.add_parser('coordination')
     coordination.add_argument('--input', required=True)
@@ -360,7 +574,10 @@ def main(argv=None):
             result = stage_install(runtime, args.destination, args.update)
         elif args.mode == 'watcher':
             require(args.watcher_args, 'watcher command required')
-            result = watcher_command(runtime, args.watcher_args[0], *args.watcher_args[1:])
+            runtime.bind()
+            mutation = args.watcher_args[0] in {'start', 'stop', 'renew', 'ingest', 'once'}
+            with lifecycle_lock(runtime) if mutation else contextlib.nullcontext():
+                result = watcher_command(runtime, args.watcher_args[0], *args.watcher_args[1:])
         else:
             w, engine = runtime.workflow()
             if args.mode == 'coordination':
@@ -390,31 +607,11 @@ def main(argv=None):
             else:
                 require(args.command in w.COMMAND_FIELDS, 'unsupported candidate workflow command')
                 payload = w.read_json(Path(args.input)) if args.input else w.strict_json(sys.stdin.read() or '{}')
-                if args.command in ACTIVATION_COMMANDS:
-                    preflight_activation(w, engine, args.command, payload)
-                    try:
-                        sample = watcher_ready(runtime, args.command, payload, args.usage_input)
-                        result = engine.execute(args.command, payload)
-                        result['watcher'] = watcher_summary(sample)
-                    except BaseException:
-                        watcher_stop_verified(runtime)
-                        raise
-                else:
-                    if args.usage_input:
-                        watcher_command(runtime, 'ingest', '--usage-input', args.usage_input)
-                    if active_state(engine):
-                        sample = renew_for_work(runtime, args.command)
-                    else:
-                        sample = None
-                    result = engine.execute(args.command, payload)
-                    if args.command in TERMINAL_COMMANDS and result.get('status') in {'halted', 'complete'}:
-                        sample = watcher_stop_verified(runtime)
-                    if sample is not None and args.command in {'status', 'complete', 'halt'}:
-                        result['watcher'] = watcher_summary(sample)
+                result = execute_workflow_command(runtime, w, engine, args.command, payload, args.usage_input, args.startup_attempt_sha256)
         print(json.dumps(result, ensure_ascii=False))
         return 0
     except (CandidateError, OSError, ValueError, RuntimeError, KeyError, TypeError) as exc:
-        print(json.dumps(dict(error=str(exc), code=getattr(exc, 'code', 'CANDIDATE_REFUSED'), field=getattr(exc, 'field', '$'), **({'invalidation': exc.receipt} if hasattr(exc, 'receipt') else {})), ensure_ascii=False), file=sys.stderr)
+        print(json.dumps(dict(error=str(exc), code=getattr(exc, 'code', 'CANDIDATE_REFUSED'), field=getattr(exc, 'field', '$'), **({'invalidation': exc.receipt} if hasattr(exc, 'receipt') else {}), **({'startup_retry': exc.startup_retry} if hasattr(exc, 'startup_retry') else {})), ensure_ascii=False), file=sys.stderr)
         return 2
 
 if __name__ == '__main__':

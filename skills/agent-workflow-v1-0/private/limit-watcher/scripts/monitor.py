@@ -124,8 +124,19 @@ def strict_json(text):
 
 
 def read(path):
-    with shared_reader(path) as handle:
-        return strict_json(handle.read())
+    deadline = time.monotonic() + WRITE_RETRY_SECONDS
+    while True:
+        try:
+            with shared_reader(path) as handle:
+                return strict_json(handle.read())
+        except (PermissionError, FileNotFoundError) as error:
+            remaining = deadline - time.monotonic()
+            # Windows replacement may briefly expose a missing name (2), as
+            # well as sharing/lock violations. Never infer data or identity.
+            # Permanent absence still fails within the same bounded deadline.
+            if getattr(error, 'winerror', None) not in (2, 32, 33) or remaining <= 0:
+                raise
+            time.sleep(min(WRITE_RETRY_INTERVAL, remaining))
 
 
 def shared_reader(path):
@@ -419,7 +430,7 @@ def policy_card(control, now):
 def validate_control(control):
     require(type(control) is dict and set(control) <= {
         'schemaVersion', 'active', 'expiresAt', 'runId', 'epoch', 'policyException',
-        'continuationQuote', 'continuedAt', 'nativeTransition', 'usageAfter'
+        'continuationQuote', 'continuedAt', 'nativeTransition', 'usageRecovery', 'usageAfter'
     }, 'invalid control fields')
     require(control.get('schemaVersion') == SCHEMA_VERSION and type(control.get('schemaVersion')) is int,
             'invalid control schema')
@@ -452,7 +463,13 @@ def validate_control(control):
                 number(transition['updatedAt']) and transition['updatedAt'] >= 0 and
                 type(transition['sourceId']) is str and bool(transition['sourceId'].strip()),
                 'invalid native transition record')
-    require(not ('continuationQuote' in control and 'nativeTransition' in control),
+    if 'usageRecovery' in control:
+        recovery = control['usageRecovery']
+        require(type(recovery) is dict and set(recovery) == {'observedAt', 'sourceId'}
+                and number(recovery['observedAt']) and recovery['observedAt'] >= 0
+                and type(recovery['sourceId']) is str and bool(recovery['sourceId'].strip()),
+                'invalid telemetry recovery record')
+    require(sum(key in control for key in ('continuationQuote', 'nativeTransition', 'usageRecovery')) <= 1,
             'mixed continuation records')
     return control
 
@@ -580,6 +597,20 @@ def latch(base, result, control):
                                        'epoch': control['epoch'], 'result': result})
 
 
+def expired_telemetry(result):
+    return (result.get('action') == 'SAVE_AND_STOP'
+            and result.get('exitReason') == 'measurement_failure'
+            and result.get('diagnosticCode') == 'usage_receipt_expired')
+
+
+def recovery_time(control, saved):
+    if 'usageRecovery' in control:
+        require(expired_telemetry(saved), 'telemetry recovery cannot clear a quota or other SAVE')
+        return control['usageRecovery']['observedAt']
+    return (control.get('continuedAt') if control.get('continuationQuote') else
+            control.get('nativeTransition', {}).get('updatedAt'))
+
+
 def latched_result(base, control=None):
     path = base / 'save-latch.json'
     if path.exists():
@@ -591,8 +622,7 @@ def latched_result(base, control=None):
         if control is None or saved.get('epoch') == control['epoch']:
             return saved['result']
         # An epoch change alone is never authorization to bypass a prior latch.
-        continued = (control.get('continuedAt') if control.get('continuationQuote') else
-                     control.get('nativeTransition', {}).get('updatedAt'))
+        continued = recovery_time(control, saved['result'])
         require(number(continued) and continued > saved['result'].get('at', 0),
                 'SAVE requires a newer continuation transition')
         require(continued <= time.time(), 'continuation cannot be in future')
@@ -603,10 +633,9 @@ def latched_result(base, control=None):
         if result.get('action') == 'SAVE_AND_STOP':
             epoch = result.get('policy', {}).get('epoch')
             if control is None or epoch == control['epoch'] or not (control.get('continuationQuote') or
-                                                                      control.get('nativeTransition')):
+                                                                      control.get('nativeTransition') or control.get('usageRecovery')):
                 return result
-            continued = (control.get('continuedAt') if control.get('continuationQuote') else
-                         control['nativeTransition']['updatedAt'])
+            continued = recovery_time(control, result)
             require(continued > result.get('at', 0), 'SAVE requires a newer continuation transition')
     return None
 
@@ -665,6 +694,16 @@ def marker_state(base, now=None):
         return {'identityState': state, 'liveIdentity': matched, 'heartbeatFresh': fresh, 'marker': marker}
     except (OSError, ValueError, RuntimeError, KeyError, TypeError):
         return {'identityState': 'unknown', 'liveIdentity': False, 'heartbeatFresh': False}
+
+
+def observe_worker_identity(base, timeout=0.5):
+    """Re-observe an unknown handle without launch, renewal or identity inference."""
+    deadline = time.monotonic() + timeout
+    while True:
+        worker = marker_state(base)
+        if worker['identityState'] != 'unknown' or time.monotonic() >= deadline:
+            return worker
+        time.sleep(min(0.01, max(0, deadline - time.monotonic())))
 
 
 def status(base, now=None):
@@ -828,25 +867,39 @@ def configure(base, args, now):
     saved = latched_result(base, existing)
     if args.new_epoch:
         native = args.native_transition_at is not None or args.native_receipt is not None
-        require(args.run_id and (bool(args.continuation_quote and args.continuation_quote.strip()) != native),
-                'new epoch requires exactly one direct quote or native transition')
+        recovery_at = getattr(args, 'usage_recovery_at', None)
+        recovery_receipt = getattr(args, 'usage_recovery_receipt', None)
+        telemetry = recovery_at is not None or recovery_receipt is not None
+        require(args.run_id and sum((bool(args.continuation_quote and args.continuation_quote.strip()), native, telemetry)) == 1,
+                'new epoch requires exactly one direct quote, native transition or telemetry recovery')
         if native:
             require(number(args.native_transition_at) and args.native_receipt and args.native_receipt.strip()
                     and args.native_transition_at <= now, 'complete, past native transition required')
+        if telemetry:
+            require(saved is not None and expired_telemetry(saved) and existing is not None
+                    and args.run_id == existing['runId'], 'same-run expired telemetry required')
+            require(number(recovery_at) and recovery_at <= now and recovery_receipt
+                    and recovery_receipt.strip(), 'complete, past telemetry recovery observation required')
         require(marker_state(base)['identityState'] not in ('matched', 'unknown'),
                 'stop existing worker before new epoch')
-        continued = args.native_transition_at if native else now
+        continued = recovery_at if telemetry else args.native_transition_at if native else now
         require(not saved or continued > saved.get('at', 0), 'continuation must follow SAVE')
         control = default_control(args.run_id, now)
         if saved:
             control['usageAfter'] = saved['at']
-        if native:
+        if telemetry:
+            control['usageRecovery'] = {'observedAt': recovery_at, 'sourceId': recovery_receipt}
+            # A technical refresh must not silently change an authorized window policy.
+            control['policyException'] = existing.get('policyException')
+        elif native:
             control['nativeTransition'] = {'updatedAt': args.native_transition_at,
                                            'sourceId': args.native_receipt}
         else:
             control.update({'continuationQuote': args.continuation_quote, 'continuedAt': now})
     else:
-        require(not (args.continuation_quote or args.native_transition_at is not None or args.native_receipt),
+        require(not (args.continuation_quote or args.native_transition_at is not None or args.native_receipt
+                     or getattr(args, 'usage_recovery_at', None) is not None
+                     or getattr(args, 'usage_recovery_receipt', None)),
                 'continuation evidence requires explicit new epoch')
         if saved:
             return None, saved
@@ -886,6 +939,8 @@ def main(argv=None, runtime=None):
     parser.add_argument('--continuation-quote')
     parser.add_argument('--native-transition-at', type=float)
     parser.add_argument('--native-receipt')
+    parser.add_argument('--usage-recovery-at', type=float)
+    parser.add_argument('--usage-recovery-receipt')
     parser.add_argument('--ignore-weekly-quote')
     parser.add_argument('--exception-expires-at', type=float)
     parser.add_argument('--clear-exception', action='store_true')
@@ -905,6 +960,7 @@ def main(argv=None, runtime=None):
         if args.command == 'ingest':
             require(args.usage_input and not (args.new_epoch or args.continuation_quote or
                     args.native_transition_at is not None or args.native_receipt or
+                    args.usage_recovery_at is not None or args.usage_recovery_receipt or
                     args.ignore_weekly_quote or args.exception_expires_at or args.clear_exception),
                     'ingest requires only a native usage input')
             control = load_control(base) if (base / 'control.json').exists() else default_control(args.run_id)
@@ -920,6 +976,7 @@ def main(argv=None, runtime=None):
             return 0
         if args.command in ('status', 'stop', 'run'):
             require(not (args.run_id or args.new_epoch or args.continuation_quote or args.native_transition_at is not None or
+                         args.usage_recovery_at is not None or args.usage_recovery_receipt or
                          args.native_receipt or args.ignore_weekly_quote or
                          args.exception_expires_at or args.clear_exception), 'policy flags unsupported for command')
         if args.command == 'status':
@@ -948,12 +1005,14 @@ def main(argv=None, runtime=None):
                         # Start is idempotent for a verified worker, but cannot mutate its policy.
                         require(not (args.ignore_weekly_quote or args.clear_exception or (args.run_id and runtime is None)),
                                 'use renew for live-worker policy changes')
+                        if args.usage_input:
+                            ingest_usage_input(base, load_control(base), args.usage_input)
                         result = status(base)
                         print(json.dumps(result, ensure_ascii=False))
                         return 0
                     claim_start(base)
                 elif args.command == 'renew':
-                    require(marker_state(base)['identityState'] != 'unknown', 'worker identity unverifiable')
+                    require(observe_worker_identity(base)['identityState'] != 'unknown', 'worker identity unverifiable')
                 control, saved = configure(base, args, time.time())
                 if args.usage_input and not saved:
                     ingest_usage_input(base, control, args.usage_input)

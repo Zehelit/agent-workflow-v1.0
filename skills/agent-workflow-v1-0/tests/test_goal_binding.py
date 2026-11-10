@@ -158,7 +158,7 @@ class GoalBindingTests(unittest.TestCase):
                 m.write_json(source, payload)
                 input_bytes = source.read_bytes()
                 common = [*python, str(entry), '--manifest', str(package / 'manifest.json'),
-                    '--manifest-sha256', pin, '--version', '1.0', '--project', str(self.root), '--run-id', run]
+                    '--manifest-sha256', pin, '--version', '1.1', '--project', str(self.root), '--run-id', run]
                 initialized = subprocess.run([*common, 'workflow', 'status'],
                     capture_output=True, text=True, timeout=15)
                 self.assertEqual(initialized.returncode, 0, initialized.stderr)
@@ -179,12 +179,12 @@ class GoalBindingTests(unittest.TestCase):
                 monitor.write(watcher / 'latest.json', monitor.sample(control=control,
                     measurer=lambda: windows, schedule=m.usage_schedule))
                 result = subprocess.run([*python, str(entry), '--manifest', str(package / 'manifest.json'),
-                    '--manifest-sha256', pin, '--version', '1.0', '--project', str(self.root), '--run-id', run,
+                    '--manifest-sha256', pin, '--version', '1.1', '--project', str(self.root), '--run-id', run,
                     'workflow', 'bind-active-goal', '--input', str(source)], capture_output=True, text=True, timeout=15)
                 self.assertEqual(result.returncode, 0, result.stderr)
                 def stop_watcher(entry=entry, run=run):
                     command = [*python, str(entry), '--manifest', str(package / 'manifest.json'),
-                        '--manifest-sha256', pin, '--version', '1.0', '--project', str(self.root), '--run-id', run,
+                        '--manifest-sha256', pin, '--version', '1.1', '--project', str(self.root), '--run-id', run,
                         'watcher']
                     stopped = subprocess.run([*command, 'stop'], capture_output=True, text=True, timeout=15)
                     self.assertEqual(stopped.returncode, 0, stopped.stderr)
@@ -367,6 +367,68 @@ class GoalBindingTests(unittest.TestCase):
         observation.update(observed_at=self.now, updated_at=self.now)
         self.usage(); self.call('inventory', inventory=[], observed_at=self.now)
         self.call('resume', native_ui_resume=True, app_goal_observation=observation)
+
+    def telemetry_halt(self, diagnostic='usage_receipt_expired'):
+        self.bind(); self.usage()
+        self.now += 1
+        failure = dict(at=self.now, run_id='run-a', epoch='expired-epoch',
+                       diagnostic_code=diagnostic, exit_reason='measurement_failure')
+        self.call('stop')
+        self.call('snapshot', writers_quiescent=True, next_action='deliver')
+        self.call('halt', inventory=[], observed_at=self.now, owned_processes_stopped=True,
+                  stop_evidence='test worker exited', usage_failure=failure)
+        return failure
+
+    def test_expired_telemetry_recovers_active_goal_without_human_or_inactive_transition(self):
+        self.telemetry_halt()
+        self.now += 1; self.usage(); self.call('inventory', inventory=[], observed_at=self.now)
+        observation = self.payload()['app_goal_observation']  # No new updated_at is needed.
+        result = self.call('resume', usage_recovery=True, app_goal_observation=observation)
+        self.assertEqual(result['basis'], 'usage_recovery')
+        state = m.read_json(self.engine.path)
+        self.assertEqual(state['authorization_events'], [])
+        self.assertEqual(state.get('native_resume_events', []), [])
+        self.assertEqual(state['usage_recovery']['observation'], observation)
+        self.call('task', id='resumed', role='implementer', objective='deliver', criteria=['done'])
+        self.reject('resume', dict(usage_recovery=True, app_goal_observation=observation))
+
+    def test_telemetry_recovery_cannot_replace_user_stop_or_quota_continuation(self):
+        self.bind(); self.usage(); self.halt()
+        self.now += 1; self.usage(); self.call('inventory', inventory=[], observed_at=self.now)
+        self.reject('resume', dict(usage_recovery=True,
+                                  app_goal_observation=self.payload()['app_goal_observation']))
+
+    def test_expired_telemetry_recovery_still_requires_all_recovery_checks(self):
+        self.telemetry_halt()
+        self.now += 1
+        observation = self.payload()['app_goal_observation']
+        self.reject('resume', dict(usage_recovery=True, app_goal_observation=observation))
+        self.usage()
+        self.reject('resume', dict(usage_recovery=True, app_goal_observation=observation))
+        self.call('inventory', inventory=[], observed_at=self.now)
+        for change in ({'status': 'paused'}, {'status': 'blocked'}, {'goal_id': 'other'}):
+            self.reject('resume', dict(usage_recovery=True, app_goal_observation={**observation, **change}))
+        human = self.human()
+        self.reject('resume', dict(usage_recovery=True, **human))
+        self.reject('resume', dict(usage_recovery=True, native_ui_resume=True,
+                                  app_goal_observation=observation))
+        (self.root / 'changed.txt').write_text('first')
+        self.call('snapshot', files=['changed.txt'], writers_quiescent=True, next_action='deliver')
+        (self.root / 'changed.txt').write_text('changed after checkpoint')
+        self.reject('resume', dict(usage_recovery=True, app_goal_observation=observation))
+
+    def test_telemetry_failure_does_not_override_explicit_user_stop(self):
+        self.bind(); self.usage(); self.now += 1
+        stop = self.human('explicit_stop'); stop.pop('app_goal_observation')
+        self.call('observe-authorization', **stop)
+        self.call('snapshot', writers_quiescent=True, next_action='deliver')
+        self.call('halt', inventory=[], observed_at=self.now, owned_processes_stopped=True,
+                  stop_evidence='test worker exited', usage_failure=dict(
+                      at=self.now, run_id='run-a', epoch='expired-epoch',
+                      diagnostic_code='usage_receipt_expired', exit_reason='measurement_failure'))
+        self.now += 1; self.usage(); self.call('inventory', inventory=[], observed_at=self.now)
+        self.reject('resume', dict(usage_recovery=True,
+                                  app_goal_observation=self.payload()['app_goal_observation']))
 
     def test_binding_identity_is_reserved_against_later_human_event_replay(self):
         self.bind(); self.usage(); self.halt()

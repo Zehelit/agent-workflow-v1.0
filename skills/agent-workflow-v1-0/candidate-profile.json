@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
-  "version": "1.0",
+  "version": "1.1",
   "identity": "agent-workflow-v1-0",
-  "display_name": "agent-workflow-v1.0",
+  "display_name": "agent-workflow-v1.1",
   "allow_implicit_invocation": false,
   "namespace": ".agent-workflow-v1-0"
 }

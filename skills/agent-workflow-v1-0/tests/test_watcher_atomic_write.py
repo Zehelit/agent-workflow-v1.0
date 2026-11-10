@@ -17,6 +17,44 @@ spec.loader.exec_module(m)
 
 
 class AtomicWriteTests(unittest.TestCase):
+    def test_transient_windows_sharing_read_is_retried_without_changing_content(self):
+        error = PermissionError('synthetic Windows sharing hold'); error.winerror = 32
+        reader = m.shared_reader
+        attempts = []
+        def briefly_locked(path):
+            attempts.append(path)
+            if len(attempts)==1: raise error
+            return reader(path)
+        with patch.object(m, 'shared_reader', side_effect=briefly_locked):
+            self.assertEqual(m.read(self.path), {'state':'old'})
+        self.assertEqual(len(attempts),2)
+        self.assertEqual(self.path.read_bytes(),self.old)
+
+    def test_unclassified_read_permission_failure_is_not_retried(self):
+        with patch.object(m, 'shared_reader', side_effect=PermissionError('not a sharing error')) as reader:
+            with self.assertRaises(PermissionError): m.read(self.path)
+        self.assertEqual(reader.call_count,1)
+
+    def test_windows_replacement_missing_file_gap_is_reobserved(self):
+        error=FileNotFoundError('synthetic Windows ReplaceFile gap');error.winerror=2
+        real=m.shared_reader
+        with patch.object(m,'shared_reader',side_effect=[error,real(self.path)]):
+            self.assertEqual(m.read(self.path),{'state':'old'})
+        self.assertEqual(self.path.read_bytes(),self.old)
+
+    def test_unknown_identity_is_reobserved_without_starting_or_mutating(self):
+        with patch.object(m,'marker_state',side_effect=[{'identityState':'unknown'},{'identityState':'matched'}]) as probe:
+            self.assertEqual(m.observe_worker_identity(self.base)['identityState'],'matched')
+        self.assertEqual(probe.call_count,2)
+        self.assertEqual(self.path.read_bytes(),self.old)
+
+    def test_permanent_unknown_identity_stays_unknown_after_bounded_wait(self):
+        start=time.monotonic()
+        with patch.object(m,'marker_state',return_value={'identityState':'unknown'}):
+            self.assertEqual(m.observe_worker_identity(self.base,timeout=.02)['identityState'],'unknown')
+        self.assertLess(time.monotonic()-start,.5)
+        self.assertEqual(self.path.read_bytes(),self.old)
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix='watcher-atomic-')
         self.base = Path(self.temp.name).resolve()

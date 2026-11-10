@@ -223,11 +223,12 @@ class NativeUsageTests(unittest.TestCase):
         spec = importlib.util.spec_from_file_location('native_bridge_only', PACKAGE / 'scripts/candidate.py')
         candidate = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(candidate)
-        runtime = object()
+        from types import SimpleNamespace
+        runtime = SimpleNamespace(core=SimpleNamespace(read_json=lambda path: {'observedAt': self.now}))
         for command, payload in [('activate', {}), ('resume', {'native_ui_resume': True,
                 'app_goal_observation': {'updated_at': self.now, 'source_id': 'native-goal-receipt'}})]:
             with self.subTest(command=command), patch.object(candidate, 'watcher_command',
-                    side_effect=[{}, {'action': 'CONTINUE', 'health': {'healthy': True}}]) as command_call:
+                    side_effect=[{}, {'at': self.now, 'action': 'CONTINUE', 'health': {'healthy': True}}]) as command_call:
                 candidate.watcher_ready(runtime, command, payload, 'current-usage.json')
                 arguments = command_call.call_args_list[0].args
                 self.assertEqual(arguments[-2:], ('--usage-input', 'current-usage.json'))

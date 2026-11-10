@@ -182,6 +182,18 @@ def check_field(value, kind, path):
     elif kind == 'native_binding':
         object_fields(value, {**{key: 'text' for key in ('binding_id', 'goal_id', 'thread_id', 'run_id', 'objective')},
                               'scope': 'scope', 'goal_created_at': 'timestamp', 'observed_at': 'timestamp'}, {}, path)
+    elif kind == 'usage_failure':
+        object_fields(value, dict(at='timestamp', run_id='text', epoch='text',
+                                  diagnostic_code='text', exit_reason='text'), {}, path)
+        require(value['diagnostic_code'] == 'usage_receipt_expired'
+                and value['exit_reason'] == 'measurement_failure',
+                'only expired telemetry is recoverable without new continuation', path)
+    elif kind == 'decision_windows':
+        require(type(value) is list and value == [300], 'only a bounded weekly exception is supported', path)
+    elif kind == 'usage_policy':
+        object_fields(value, dict(run_id='text', epoch='text', decision_windows='decision_windows',
+                                 exact_quote='text', valid_from='timestamp', valid_until='timestamp'), {}, path)
+        require(value['valid_from'] < value['valid_until'], 'invalid usage policy validity', path)
     elif kind == 'source':
         object_fields(value, dict(source_kind='text', source_id='text', exact_quote='text', source_created_at='timestamp', original_turn_id='text'), {}, path)
     elif kind in {'file_inputs', 'review_targets', 'pinned_files', 'pinned_targets'}:
@@ -251,8 +263,8 @@ COMMAND_FIELDS = {
     'stop': ({}, {}),
     'snapshot': (dict(writers_quiescent='bool', next_action='text'), {'files': 'strings'}),
     'restore': ({'destination': 'text'}, {}),
-    'halt': ({**INV_FIELDS, 'owned_processes_stopped': 'bool', 'stop_evidence': 'text'}, dict(degraded='bool', reason='text', next_action='text')),
-    'resume': ({'app_goal_observation': 'app_goal'}, {**AUTH_FIELDS, 'native_ui_resume': 'bool'}),
+    'halt': ({**INV_FIELDS, 'owned_processes_stopped': 'bool', 'stop_evidence': 'text'}, dict(degraded='bool', reason='text', next_action='text', usage_failure='usage_failure')),
+    'resume': ({'app_goal_observation': 'app_goal'}, {**AUTH_FIELDS, 'native_ui_resume': 'bool', 'usage_recovery': 'bool'}),
     'compact': ({}, {}), 'complete': ({}, {}), 'status': ({}, {}),
 }
 
@@ -580,16 +592,16 @@ def validate_state(s):
         invalid('STATE_TYPE', '$', 'state object required')
     version = s.get('schema_version')
     if type(version) is not int or version != SCHEMA_VERSION:
-        invalid('STATE_VERSION', '$.schema_version', 'schema_version 2 required; create a fresh approved v1.0 run')
+        invalid('STATE_VERSION', '$.schema_version', 'schema_version 2 required; create a fresh approved AGWF run')
     kinds = dict(status='text', objective='text', authorization='authorization', scope='scope', goal_id='text',
                  thread_id='text', run_id='text', app_goal_observation='app_goal', models='models',
                  slot_limit='count', session_limit='count?', created_at='timestamp', stopped_at='timestamp',
                  halted_at='timestamp', completed_at='timestamp', stop_evidence='text', next_action='text',
                  recovery_error='text', authorization_event_ids='strings', reserved_run_ids='strings', reserved_scope_ids='strings',
-                 native_binding='native_binding', native_binding_ids='strings')
+                 native_binding='native_binding', native_binding_ids='strings', usage_failure='usage_failure')
     compound = {'schema_version', 'tasks', 'inventory', 'usage', 'usage_errors', 'authorization_events',
                 'checkpoint', 'previous_checkpoint', 'source_watermark', 'invalidations', 'native_binding_events',
-                'native_resume_events'}
+                'native_resume_events', 'usage_recovery'}
     for key in s:
         path = field_path('$', key)
         if key not in kinds and key not in compound:
@@ -674,7 +686,12 @@ def validate_state(s):
         require(type(usage) is dict, 'usage object required')
         object_fields({k: v for k, v in usage.items() if k not in {'windows', 'rates'}},
                       dict(at='timestamp', remaining='percent', next_check_at='timestamp', check_interval_seconds='count',
-                           estimated_seconds_to_threshold='timestamp?', action='text'), {}, '$.usage')
+                           estimated_seconds_to_threshold='timestamp?', action='text'), dict(decision_policy='usage_policy'), '$.usage')
+        if 'decision_policy' in usage:
+            policy = usage['decision_policy']
+            require(policy['run_id'] == s.get('run_id')
+                    and policy['valid_from'] <= usage['at'] < policy['valid_until']
+                    and usage['next_check_at'] <= policy['valid_until'], 'stored usage policy mismatch or expiry')
         require(type(usage.get('windows')) is dict and type(usage.get('rates')) is dict, 'usage maps required')
         for value in usage['windows'].values():
             check_field(value, 'window', '$.usage.windows')
@@ -772,17 +789,39 @@ def validate_state(s):
         basis = s.get('authorization', s.get('native_binding'))
         require(type(basis) is dict and all(basis[key] == s[key] for key in ('goal_id', 'thread_id', 'run_id'))
                 and basis['scope'] == s['scope'], 'stored authorization identity or replay ledger mismatch')
+        recovery = s.get('usage_recovery')
+        if 'usage_failure' in s:
+            failure = s['usage_failure']
+            require(failure['run_id'] == s['run_id'] and failure['at'] <= s.get('halted_at', -1),
+                    'stored telemetry failure run or chronology mismatch')
+        if recovery is not None:
+            object_fields(recovery, dict(observation='app_goal', failure='usage_failure',
+                                         stopped_at='timestamp', halted_at='timestamp'), {}, '$.usage_recovery')
+            observation, failure = recovery['observation'], recovery['failure']
+            require(failure == s.get('usage_failure') and failure['run_id'] == s['run_id']
+                    and failure['at'] <= recovery['stopped_at'] <= recovery['halted_at'] < observation['observed_at']
+                    and observation['status'] == 'active' and observation['source_kind'] == 'get_goal'
+                    and all(observation[k] == s[k] for k in ('goal_id', 'thread_id')),
+                    'stored telemetry recovery identity or chronology mismatch')
+            if 'native_binding' in s:
+                validate_native_binding(basis, observation)
         if s['status'] == 'active':
             authorized_at = basis['source_created_at'] if 'authorization' in s else basis['observed_at']
             if 'native_binding' in s and native_resumes:
                 authorized_at = native_resumes[-1]['observation']['updated_at']
-            boundaries = [s[key] for key in ('stopped_at', 'halted_at') if key in s]
             # A delayed but accepted stop consumes the current basis when observed.
             # Preserve its original source timestamp separately for replay checks.
-            boundaries.extend(entry['event']['observed_at'] for entry in events
-                              if entry['event']['kind'] == 'explicit_stop'
-                              and all(entry['event'][key] == s[key] for key in ('goal_id', 'thread_id', 'run_id'))
-                              and entry['event']['scope'] == s['scope'])
+            user_stops = [entry['event']['observed_at'] for entry in events
+                          if entry['event']['kind'] == 'explicit_stop'
+                          and all(entry['event'][key] == s[key] for key in ('goal_id', 'thread_id', 'run_id'))
+                          and entry['event']['scope'] == s['scope']]
+            require(all(authorized_at > boundary for boundary in user_stops),
+                    'telemetry recovery cannot override explicit user stop')
+            boundaries = [s[key] for key in ('stopped_at', 'halted_at') if key in s]
+            if recovery is not None:
+                require(all(recovery[key] == s.get(key) for key in ('stopped_at', 'halted_at')),
+                        'telemetry recovery does not cover latest halt')
+                authorized_at = max(authorized_at, recovery['observation']['observed_at'])
             require(all(authorized_at > boundary for boundary in boundaries),
                     'active authorization must be later than retained stop/halt history')
         if 'authorization' in s:
@@ -801,7 +840,7 @@ def validate_native_binding(binding, observation):
 
 
 class Workflow:
-    def __init__(self, project, codex_home, clock=time.time, fault=None, *, state_base=None, role_catalog=None, provenance_guard=None, run_id=None):
+    def __init__(self, project, codex_home, clock=time.time, fault=None, *, state_base=None, role_catalog=None, provenance_guard=None, run_id=None, usage_policy_provider=None):
         self.root = Path(project).resolve()
         require(self.root.is_dir(), 'project must exist')
         self.home = Path(codex_home).resolve()
@@ -810,6 +849,7 @@ class Workflow:
         unlinked(self.base, self.root)
         self.provenance_guard = provenance_guard
         self.run_id = run_id
+        self.usage_policy_provider = usage_policy_provider
         self.path = self.base / 'state.json'
         self.clock = clock
         self.catalog = roles(self.home) if role_catalog is None else role_catalog
@@ -1426,7 +1466,24 @@ class Workflow:
                 if s['usage_errors'] >= 2 and s['status'] not in {'halted', 'complete'}:
                     s['status'] = 'stopping'
                 return {'action': 'SAVE_AND_STOP' if s['usage_errors'] >= 2 else 'RETRY_USAGE_ONCE'}
-            schedule = usage_schedule(windows, p['observed_at'], s.get('usage'))
+            policy = self.usage_policy_provider() if self.usage_policy_provider else None
+            chosen = windows
+            previous = s.get('usage')
+            if policy is not None:
+                check_field(policy, 'usage_policy', '$.usage.decision_policy')
+                require(policy['run_id'] == s['run_id']
+                        and policy['valid_from'] <= p['observed_at'] <= now < policy['valid_until'],
+                        'fresh run-bound usage policy required')
+                chosen = {key:windows[key] for key in policy['decision_windows']}
+            if previous and previous.get('decision_policy') != policy:
+                previous = None
+            schedule = usage_schedule(chosen, p['observed_at'], previous)
+            schedule['windows'] = {str(key):value for key,value in windows.items()}
+            if policy is not None:
+                schedule['decision_policy'] = policy
+                schedule['next_check_at'] = min(schedule['next_check_at'], policy['valid_until'])
+                schedule['check_interval_seconds'] = min(schedule['check_interval_seconds'],
+                    max(1, int(policy['valid_until'] - p['observed_at'])))
             s.update(usage=schedule, usage_errors=0)
             if schedule['action'] == 'SAVE_AND_STOP' and s['status'] not in {'halted', 'complete'}:
                 s['status'] = 'stopping'
@@ -1693,14 +1750,30 @@ class Workflow:
             else:
                 self.verify_checkpoint(s, current=True)
                 s.pop('recovery_error', None)
+            s.pop('usage_recovery', None)
+            s.pop('usage_failure', None)
+            if 'usage_failure' in p:
+                failure = p['usage_failure']
+                require(failure['run_id'] == s['run_id'] and failure['at'] <= s['stopped_at'],
+                        'telemetry failure must belong to this run and precede stop')
+                s['usage_failure'] = failure
             s.update(status='halted', halted_at=now, stop_evidence=p['stop_evidence'])
             return {'status': 'halted', 'recovery_verified': not p.get('degraded', False)}
         if command == 'resume':
             require(s['status'] == 'halted', 'halted run and new continuation required')
             native = p.get('native_ui_resume') is True
-            require(native != ('authorization' in p or 'interpretation' in p or 'source_message' in p),
-                    'choose exactly one native UI or direct user continuation basis')
-            if native:
+            telemetry = p.get('usage_recovery') is True
+            direct = 'authorization' in p or 'interpretation' in p or 'source_message' in p
+            require(sum((native, telemetry, direct)) == 1,
+                    'choose exactly one telemetry recovery, native UI or direct user continuation basis')
+            if telemetry:
+                require('usage_failure' in s, 'recorded expired telemetry required for technical recovery')
+                basis = s.get('authorization', s.get('native_binding'))
+                app = self.app_goal(p, basis, after=s['halted_at'])
+                # This restores existing authority; it never invents a user/UI event.
+                s['usage_recovery'] = dict(observation=app, failure=s['usage_failure'],
+                                           stopped_at=s['stopped_at'], halted_at=s['halted_at'])
+            elif native:
                 require('native_binding' in s, 'native UI resume requires current native binding')
                 basis = s['native_binding']
                 app = self.app_goal(p, basis, after=s['halted_at'])
@@ -1734,14 +1807,16 @@ class Workflow:
                     task.pop('prepared', None)
             s.update(status='active', app_goal_observation=app)
             if native:
+                s.pop('usage_recovery', None)
                 s.setdefault('native_resume_events', []).append(dict(observation=app, prior_observation=prior,
                                                                       halted_at=s['halted_at']))
-            else:
+            elif not telemetry:
+                s.pop('usage_recovery', None)
                 s['authorization'] = event
                 s.pop('native_binding', None)
                 self.remember_authorization(s, event, p['interpretation'], p['source_message'])
             s.pop('recovery_error', None)
-            return {'status': 'active', 'basis': 'native_ui_transition' if native else 'user_message',
+            return {'status': 'active', 'basis': 'usage_recovery' if telemetry else 'native_ui_transition' if native else 'user_message',
                     'next_action': s.get('next_action')}
         if command in {'compact', 'complete'}:
             require(all(t['state'] in TERMINAL for t in s['tasks'].values()), 'unfinished tasks remain')
